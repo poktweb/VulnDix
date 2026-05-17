@@ -1,0 +1,8 @@
+# VulnDix — redirect.txt (gerado automaticamente)
+# Total: 5 payloads | Fontes online: 0
+# Repositórios: swisskyrepo/PayloadsAllTheThings, danielmiessler/SecLists, fuzzdb-project/fuzzdb
+https://evil.example.test/redirect
+\/evil.example.test
+https://evil.example.test
+javascript:alert(1)
+/data:text/html,test

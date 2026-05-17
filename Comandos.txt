@@ -1,0 +1,308 @@
+================================================================================
+  VulnDix — Guia de uso e exemplos
+  Scanner DAST: crawl (Playwright) + fuzz (requests/curl) + relatório limpo
+================================================================================
+
+AVISO LEGAL
+-----------
+• Use SOMENTE em sistemas com autorização explícita (pentest, bug bounty no escopo).
+• Toda execução exige a flag --i-understand.
+• O modo estrito evita falsos positivos (ex.: parâmetro _rsc do Next.js não é reportado).
+
+
+INSTALAÇÃO
+----------
+  cd VulnDix
+  pip install -r requirements.txt
+  playwright install chromium
+
+  Na primeira execução do scan, o VulnDix baixa payloads sozinho (precisa de internet).
+  Fontes: PayloadsAllTheThings + SecLists + fuzzdb (GitHub).
+  Arquivos em vulndix/payloads/*.txt — não é preciso rodar comando separado.
+
+  Forçar novo download: python vulndix.py --refresh-payloads -u https://alvo/ --i-understand
+  Sem internet (só local):  --skip-payload-sync
+
+
+SAÍDA (como ler os resultados)
+------------------------------
+• Durante o scan: mensagens de progresso vão para o STDERR (terminal).
+• Ao final: resumo formatado no STDERR (tabela legível).
+• Relatório completo: use -o report.json (só é criado se houver achados).
+• JSONL no stdout: só se passar --jsonl (para pipes/scripts).
+
+Estrutura do report.json:
+  {
+    "tool": "VulnDix",
+    "target": "https://...",
+    "summary": { "total": N, "by_type": {...} },
+    "findings": [ { "type", "endpoint", "param", "payload", "evidence", "curl" } ]
+  }
+
+O que NÃO é reportado (anti falso positivo):
+  • Parâmetros de framework: _rsc, _next, __nextjs, utm_*, etc.
+  • Reflexão de token de teste sem contexto HTML perigoso
+  • Respostas JSON / RSC (text/x-component) sem XSS real
+  • Links para .pdf, .png, .js, etc. (não entram no crawl)
+
+
+MODO ALL (scan completo — qualquer alvo)
+--------------------------------------
+  python vulndix.py -u https://alvo.com/ --all -o report.json --i-understand
+
+  Ativa as 16 categorias sem listar --categories:
+    fuzz: sqli, xss, nosql, ssrf, xxe, lfi, traversal, cmdi, ssti, redirect, host_header
+    passivo: idor, cors, csrf, clickjacking, info
+  Também liga --fuzz-headers e --ignore-robots; usa 40 payloads/categoria.
+  Baixa listas faltantes do GitHub na 1ª execução.
+
+
+LABS PORTSWIGGER (recomendado para Academy)
+------------------------------------------
+  python vulndix.py -u https://SEU-LAB.web-security-academy.net/ --portswigger -o report.json --i-understand
+
+  Igual --all + enfileira rotas típicas dos labs:
+  /filter?category=, /product?productId=, /login, /admin, etc.
+  Limite padrão: 40 páginas (labs são pequenos).
+
+
+COMANDOS BÁSICOS
+----------------
+
+1) Scan completo com relatório em arquivo (recomendado):
+
+  python vulndix.py -u https://alvo.com/ --all -o report.json --i-understand
+
+  Explicação: todas as falhas (--all). Sem --all, só 7 categorias (xss, sqli, lfi, …).
+  O terminal mostra progresso + resumo final; report.json só se houver achados.
+
+
+1b) Scan rápido (só 7 categorias padrão):
+
+  python vulndix.py -u https://alvo.com/ --i-understand -o report.json
+
+
+2) Lab PortSwigger — só SQLi (rápido):
+
+  python vulndix.py -u https://SEU-LAB.web-security-academy.net/ --categories sqli --max-payloads 50 -o report.json --i-understand
+
+  Explicação: prioriza ' OR 1=1-- e confirma SQLi booleano (sem precisar de erro MySQL na página).
+
+
+3) Só XSS e SQLi, scan mais rápido:
+
+  python vulndix.py -u https://alvo.com/ --categories xss,sqli --max-payloads 15 -o report.json --i-understand
+
+  Explicação: limita tipos de teste e quantidade de payloads por categoria.
+
+
+4) Crawl limitado (sites grandes):
+
+  python vulndix.py -u https://alvo.com/ --max-pages 20 --max-depth 2 -o report.json --i-understand
+
+  Explicação: visita no máximo 20 páginas e profundidade 2 de links.
+
+
+5) Apenas descobrir pontos de injeção (sem fuzz):
+
+  python vulndix.py -u https://alvo.com/ --crawl-only --i-understand
+
+  Explicação: lista URLs/parâmetros encontrados em JSONL no stdout.
+
+
+AUTENTICAÇÃO
+------------
+
+6) Cookie de sessão:
+
+  python vulndix.py -u https://alvo.com/app --cookie "session=VALOR" --i-understand -o report.json
+
+  Explicação: envia o cookie em todas as requisições do crawl e do fuzz.
+
+
+7) Token Bearer (API / SPA):
+
+  python vulndix.py -u https://alvo.com/api --token "eyJhbGc..." --i-understand -o report.json
+
+  Explicação: adiciona header Authorization: Bearer ...
+
+
+8) Header customizado:
+
+  python vulndix.py -u https://alvo.com/ --header "X-API-Key: chave" --i-understand -o report.json
+
+
+9) Login automático (formulário):
+
+  python vulndix.py -u https://alvo.com/dashboard ^
+    --login-url https://alvo.com/login ^
+    --user admin --password "SuaSenha" ^
+    --i-understand -o report.json
+
+  Explicação: abre a página de login, preenche usuário/senha e submete antes do crawl.
+  Seletores CSS opcionais: --login-user-selector, --login-pass-selector, --login-submit-selector
+
+
+10) Login + token combinados:
+
+  python vulndix.py -u https://alvo.com/ ^
+    --login-url https://alvo.com/login --user u --password p ^
+    --token "seu_jwt" --i-understand -o report.json
+
+
+PERFORMANCE E REDE
+------------------
+
+11) Mais lento (evitar bloqueio WAF):
+
+  python vulndix.py -u https://alvo.com/ --delay-ms 300 --threads 2 --i-understand -o report.json
+
+12) TLS inválido / certificado autoassinado:
+
+  python vulndix.py -u https://lab.local/ --insecure --i-understand -o report.json
+
+13) Ignorar robots.txt:
+
+  python vulndix.py -u https://alvo.com/ --ignore-robots --i-understand -o report.json
+
+14) Fuzzar também headers (User-Agent, Referer, Host, etc.):
+
+  python vulndix.py -u https://alvo.com/ --fuzz-headers --i-understand -o report.json
+
+
+SAÍDA PARA SCRIPTS
+------------------
+
+15) JSONL no stdout (uma linha JSON por achado):
+
+  python vulndix.py -u https://alvo.com/ --jsonl --i-understand -o report.json
+
+  Explicação: stderr = progresso; stdout = linhas JSON dos achados (para grep/jq).
+
+
+CATEGORIAS DE TESTE
+-------------------
+  Ativas (fuzz HTTP):
+    sqli        — SQL Injection (erro SQL, time-based, boolean — labs PortSwigger)
+    xss         — Cross-Site Scripting (reflexão em HTML perigosa)
+    nosql       — NoSQL Injection (MongoDB, operadores $gt/$ne, bypass login)
+    ssrf        — Server-Side Request Forgery (127.0.0.1, metadata, etc.)
+    xxe         — XML External Entity (corpos XML)
+    lfi         — Local File Inclusion
+    traversal   — Path Traversal
+    ssti        — Server-Side Template Injection
+    cmdi        — Command Injection
+    redirect    — Open Redirect
+    host_header — Host header attacks (labs PortSwigger)
+
+  Passivas (sem payload; analisa páginas do crawl):
+    idor          — IDOR / access control (productId, userId ±1)
+    cors          — CORS mal configurado
+    csrf          — Formulário POST sem token anti-CSRF
+    clickjacking  — Sem X-Frame-Options / CSP frame-ancestors
+    info          — Stack trace, erros SQL expostos na página
+
+  Padrão (sem flags): xss, sqli, lfi, ssti, cmdi, redirect, traversal
+  Com --all ou --portswigger: todas as 16 categorias acima
+
+  Modo completo (qualquer alvo autorizado):
+    python vulndix.py -u https://alvo.com/ --all -o report.json --i-understand
+
+  Filtrar manualmente (não combine com --all):
+    --categories sqli,xss,nosql
+
+
+INTERPRETAÇÃO DOS ACHADOS
+-------------------------
+  confidence: high   — evidência forte (ex.: erro SQL, <script> refletido)
+  confidence: medium — evidência razoável; validar manualmente
+
+  Cada achado inclui:
+    endpoint  — URL com o payload aplicado
+    param     — nome do parâmetro testado
+    payload   — string enviada
+    evidence  — motivo do alerta
+    curl      — comando para reproduzir (quando disponível)
+
+
+PAYLOADS (automático na execução)
+---------------------------------
+16) O download ocorre sozinho na 1ª vez que você roda um scan (se faltar arquivo):
+
+  python vulndix.py -u https://alvo.com/ --all --i-understand -o report.json
+
+17) Forçar baixar de novo antes do scan:
+
+  python vulndix.py -u https://alvo.com/ --all --refresh-payloads --i-understand -o report.json
+
+18) Só atualizar payloads de todas as categorias, sem scan:
+
+  python vulndix.py --update-payloads --all
+  # ou: python -m vulndix.payload_updater
+
+19) Offline — não tentar GitHub:
+
+  python vulndix.py -u https://alvo.com/ --skip-payload-sync --i-understand
+
+  --max-payloads (padrão 30; --all e --portswigger usam 40) = quantos payloads USAR no scan.
+  --payloads-cache-max (padrão 500) = quantos SALVAR ao baixar do GitHub.
+
+
+FLAGS PRINCIPAIS (referência rápida)
+------------------------------------
+  -u URL                  Alvo (obrigatório no scan)
+  --i-understand          Confirma autorização legal (obrigatório)
+  --all                   Todas as falhas (16 categorias); não precisa --categories
+  --portswigger           Igual --all + rotas típicas dos labs Academy
+  -o report.json          Salva relatório (só se houver achados)
+  --categories a,b,c      Filtra tipos (não use junto com --all)
+  --max-payloads N        Payloads por categoria no fuzz
+  --max-pages N           Limite de páginas no crawl
+  --crawl-only            Só descobrir parâmetros, sem fuzz
+  --refresh-payloads      Rebaixa listas do GitHub antes do scan
+  --skip-payload-sync     Não usa internet para payloads
+  --fuzz-headers          Testa User-Agent, Referer, Host, etc.
+  --jsonl                 Achados também no stdout (JSON por linha)
+  --table                 (legado) use o resumo no stderr + -o
+  --login-url / --user / --password   Login automático
+  --cookie / --token / --header       Sessão e API
+
+
+PAYLOADS CUSTOMIZADOS
+-----------------------
+  Coloque arquivos .txt em vulndix/payloads/ (xss.txt, sqli.txt, ...)
+  Rode update_payloads.py de novo para mesclar com as listas do GitHub.
+  Ou use outro diretório:
+
+  python vulndix.py -u https://alvo.com/ --payload-dir C:\minhas\payloads --i-understand -o report.json
+
+
+EXEMPLOS REAIS
+--------------
+  Alvo genérico (pentest autorizado) — tudo de uma vez:
+
+  python vulndix.py -u https://app.cliente.com/ --all -o report.json --i-understand
+
+  PortSwigger (lab ativo na sua conta):
+
+  python vulndix.py -u https://xxxx.web-security-academy.net/ --portswigger -o report.json --i-understand
+
+  Site público de demonstração (rápido, só XSS+SQLi):
+
+  python vulndix.py -u http://testphp.vulnweb.com/artists.php?artist=1 ^
+    --max-pages 5 --categories xss,sqli --i-understand -o report.json
+
+
+SOLUÇÃO DE PROBLEMAS
+---------------------
+  "Adicione --i-understand"     → falta confirmar autorização legal
+  Crawl timeout               → rede lenta; reduza --max-pages
+  0 achados                   → normal se modo estrito; lab SQLi: --categories sqli --max-payloads 50
+                              → scan amplo: use --all ou --portswigger
+  Relatório não gerado        → esperado quando não há achados (sem falso report.json vazio)
+  playwright install chromium → necessário na primeira instalação
+
+Labs PortSwigger NÃO cobertos por este scanner (manual):
+  JWT, OAuth, request smuggling, race conditions, WebSockets, file upload, business logic
+
+================================================================================

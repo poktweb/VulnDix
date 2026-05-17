@@ -1,0 +1,10 @@
+# VulnDix — ssti.txt (gerado automaticamente)
+# Total: 7 payloads | Fontes online: 0
+# Repositórios: swisskyrepo/PayloadsAllTheThings, danielmiessler/SecLists, fuzzdb-project/fuzzdb
+{{7*7}}
+${7*7}
+<%= 7*7 %>
+*{7*7}
+{{config}}
+{{''.__class__}}
+@(7*7)

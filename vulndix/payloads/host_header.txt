@@ -1,0 +1,4 @@
+# Seeds PortSwigger — Host header attacks
+127.0.0.1
+localhost
+evil.example.test
