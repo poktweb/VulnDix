@@ -10,6 +10,27 @@ from vulndix.filters import is_skippable_url, should_skip_param
 from vulndix.models import InjectionPoint, Location
 
 SKIP_INPUT_TYPES = frozenset({"submit", "button", "image", "reset", "file"})
+MAX_SYNTHETIC_ENDPOINTS = 25
+MAX_SYNTHETIC_PARAMS_PER_URL = 14
+
+# Parâmetros comuns quando o site não expõe ?id= no HTML (SPAs, marketing sites)
+COMMON_PROBE_PARAMS: tuple[tuple[str, str], ...] = (
+    ("id", "1"),
+    ("page", "1"),
+    ("productId", "1"),
+    ("product_id", "1"),
+    ("cat", "1"),
+    ("category", "test"),
+    ("q", "test"),
+    ("search", "test"),
+    ("query", "test"),
+    ("redirect", "/"),
+    ("url", "https://example.com"),
+    ("file", "index.html"),
+    ("lang", "en"),
+    ("ref", "1"),
+)
+
 FUZZ_HEADER_NAMES = (
     "User-Agent",
     "Referer",
@@ -228,13 +249,159 @@ def dedupe_points(points: list[InjectionPoint]) -> list[InjectionPoint]:
 
 
 def extract_links(html: str, base_url: str) -> list[str]:
-    hrefs = re.findall(r"""<a[^>]+href=["']([^"'#]+)["']""", html, re.I)
+    hrefs = re.findall(
+        r"""<a[^>]+href=["']([^"'#]+)["']""",
+        html,
+        re.I,
+    )
+    hrefs += re.findall(r"""href=["']([^"'#?][^"']*)["']""", html, re.I)
     links: list[str] = []
+    seen: set[str] = set()
     for href in hrefs:
-        if href.startswith(("javascript:", "mailto:", "tel:")):
+        if href.startswith(("javascript:", "mailto:", "tel:", "data:")):
             continue
         full = urljoin(base_url, href)
-        if is_skippable_url(full):
+        clean = full.split("#")[0]
+        if is_skippable_url(clean) or clean in seen:
             continue
-        links.append(full)
+        seen.add(clean)
+        links.append(clean)
+    links.extend(extract_urls_from_scripts(html, base_url))
     return links
+
+
+def extract_urls_from_scripts(html: str, base_url: str) -> list[str]:
+    """Rotas em JSON embutido (__NEXT_DATA__, RSC, etc.)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    p = urlparse(base_url)
+    root = f"{p.scheme}://{p.netloc}"
+
+    for m in re.finditer(r'"(?:href|url|path|route|permalink)":\s*"(/(?!/)[^"]{1,200})"', html):
+        full = urljoin(root, m.group(1))
+        if not is_skippable_url(full) and full not in seen:
+            seen.add(full)
+            out.append(full)
+
+    for m in re.finditer(rf"https?://{re.escape(p.netloc)}[/\w\-.%]*", html, re.I):
+        u = m.group(0).split('"')[0].split("\\")[0]
+        if not is_skippable_url(u) and u not in seen:
+            seen.add(u)
+            out.append(u)
+
+    next_data = re.search(
+        r'<script[^>]*id="__NEXT_DATA__"[^>]*>(\{.*?\})</script>',
+        html,
+        re.DOTALL | re.I,
+    )
+    if next_data:
+        try:
+            data = json.loads(next_data.group(1))
+            _walk_json_urls(data, root, out, seen)
+        except json.JSONDecodeError:
+            pass
+    return out
+
+
+def _walk_json_urls(obj: Any, root: str, out: list[str], seen: set[str]) -> None:
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in ("href", "url", "path", "slug", "permalink") and isinstance(v, str) and v.startswith("/"):
+                full = urljoin(root, v)
+                if not is_skippable_url(full) and full not in seen:
+                    seen.add(full)
+                    out.append(full)
+            else:
+                _walk_json_urls(v, root, out, seen)
+    elif isinstance(obj, list):
+        for item in obj[:200]:
+            _walk_json_urls(item, root, out, seen)
+
+
+def endpoint_base(url: str) -> str:
+    """URL sem query para enfileirar parâmetros sintéticos."""
+    p = urlparse(url)
+    return urlunparse((p.scheme, p.netloc, p.path or "/", "", "", ""))
+
+
+def points_from_path_ids(url: str, headers: dict[str, str]) -> list[InjectionPoint]:
+    """Segmentos numéricos no path → ponto tipo path (product/123)."""
+    points: list[InjectionPoint] = []
+    p = urlparse(url)
+    parts = [x for x in (p.path or "/").split("/") if x]
+    for i, seg in enumerate(parts):
+        if seg.isdigit() or (len(seg) >= 8 and re.fullmatch(r"[a-f0-9-]+", seg, re.I)):
+            points.append(
+                InjectionPoint(
+                    url=url,
+                    method="GET",
+                    location="path",
+                    name=f"segment_{i}",
+                    baseline_value=seg,
+                    headers=dict(headers),
+                    url_template=url,
+                )
+            )
+    return points
+
+
+def synthetic_probe_points(
+    urls: list[str],
+    headers: dict[str, str],
+    scope_host: str,
+    *,
+    max_endpoints: int = MAX_SYNTHETIC_ENDPOINTS,
+) -> list[InjectionPoint]:
+    """
+    Cria ?id=1, ?page=1, etc. em rotas descobertas quando o crawl não achou parâmetros.
+    Padrão de scanners: parameter discovery em endpoints vistos.
+    """
+    bases: list[str] = []
+    seen_b: set[str] = set()
+    for raw in urls:
+        if not host_in_scope(raw, scope_host):
+            continue
+        base = endpoint_base(raw)
+        if base not in seen_b:
+            seen_b.add(base)
+            bases.append(base)
+    if not bases:
+        return []
+
+    points: list[InjectionPoint] = []
+    for base in bases[:max_endpoints]:
+        points.extend(points_from_path_ids(base, headers))
+        existing_qs = set(parse_qs(urlparse(base).query).keys())
+        added = 0
+        for name, val in COMMON_PROBE_PARAMS:
+            if name in existing_qs or should_skip_param(name):
+                continue
+            test_url = f"{base}?{urlencode({name: val})}"
+            points.append(
+                InjectionPoint(
+                    url=test_url,
+                    method="GET",
+                    location="query",
+                    name=name,
+                    baseline_value=val,
+                    headers=dict(headers),
+                    url_template=normalize_url_template(test_url),
+                )
+            )
+            added += 1
+            if added >= MAX_SYNTHETIC_PARAMS_PER_URL:
+                break
+    return points
+
+
+def collect_endpoint_urls(
+    visited: set[str],
+    captured_requests: list[dict[str, Any]],
+    scope_host: str,
+) -> list[str]:
+    urls = list(visited)
+    for entry in captured_requests:
+        u = entry.get("url", "")
+        if u and host_in_scope(u, scope_host):
+            urls.append(u.split("#")[0])
+    return urls

@@ -39,6 +39,13 @@ def _args(**kwargs: object) -> argparse.Namespace:
         "cookie": [],
         "header": [],
         "token": None,
+        "wordlist": None,
+        "fuzz_method": "GET",
+        "match_codes": None,
+        "no_fuzz_baseline_filter": False,
+        "wordlist_max": 0,
+        "no_discover_params": False,
+        "spa_wait_ms": 2500,
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
@@ -66,4 +73,6 @@ def test_all_conflicts_with_categories():
 def test_apply_presets_raises_max_payloads():
     args = _args(all=True)
     cli.apply_scan_presets(args)
-    assert args.max_payloads == 40
+    assert args.max_payloads == 8
+    assert args.threads == 30
+    assert args.delay_ms == 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -14,7 +15,8 @@ DEFAULT_PAYLOAD_DIR = Path(__file__).resolve().parent / "payloads"
 MANIFEST_NAME = "sources.manifest.txt"
 STAMP_FILE = ".payloads_synced"
 VERSION_FILE = ".payloads_version"
-PAYLOADS_TOOL_VERSION = 3
+PAYLOADS_TOOL_VERSION = 4
+DEFAULT_WORDLIST_DIR = Path(__file__).resolve().parent / "payloads" / "wordlists"
 # Mínimo de payloads por categoria para considerar "já baixado"
 MIN_PAYLOADS_READY = 15
 MIN_PAYLOADS_READY_SMALL = 5  # redirect, ssti (menos fontes online)
@@ -38,6 +40,21 @@ class PayloadSource:
     url: str
     label: str
     markdown: bool = False
+    fallbacks: tuple[str, ...] = ()
+
+
+WORDLIST_SOURCES: tuple[tuple[str, str, str], ...] = (
+    (
+        "common-dirs.txt",
+        "SecLists/common-web-content",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt",
+    ),
+    (
+        "subdomains-top.txt",
+        "SecLists/subdomains-top5000",
+        "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-5000.txt",
+    ),
+)
 
 
 # GitHub raw — PayloadsAllTheThings (swisskyrepo) + SecLists + fuzzdb
@@ -48,12 +65,16 @@ PAYLOAD_SOURCES: dict[VulnType, tuple[PayloadSource, ...]] = {
             "PAT/XSS_Polyglots",
         ),
         PayloadSource(
-            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/XSS%20Injection/Intruders/BruteXSS.txt",
-            "PAT/BruteXSS",
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/XSS%20Injection/Intruders/RSNAKE_XSS.txt",
+            "PAT/RSNAKE_XSS",
         ),
         PayloadSource(
-            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/XSS%20Injection/Intruders/RSNAKE.txt",
-            "PAT/RSNAKE",
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/XSS%20Injection/Intruders/BRUTELOGIC-XSS-STRINGS.txt",
+            "PAT/BRUTELOGIC-XSS",
+        ),
+        PayloadSource(
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/XSS%20Injection/Intruders/JHADDIX_XSS.txt",
+            "PAT/JHADDIX_XSS",
         ),
         PayloadSource(
             "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Fuzzing/URI-XSS.fuzzdb.txt",
@@ -66,6 +87,9 @@ PAYLOAD_SOURCES: dict[VulnType, tuple[PayloadSource, ...]] = {
         PayloadSource(
             "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Fuzzing/XSS/human-friendly/XSS-Bypass-Strings.txt",
             "SecLists/XSS-Bypass",
+            fallbacks=(
+                "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Fuzzing/XSS/XSS-Bypass-Strings.txt",
+            ),
         ),
         PayloadSource(
             "https://raw.githubusercontent.com/fuzzdb-project/fuzzdb/master/attack/xss/xss-rsnake.txt",
@@ -116,46 +140,51 @@ PAYLOAD_SOURCES: dict[VulnType, tuple[PayloadSource, ...]] = {
             "SecLists/LFI-linux-windows",
         ),
         PayloadSource(
-            "https://raw.githubusercontent.com/fuzzdb-project/fuzzdb/master/attack/lfi/unix-sensible-file.txt",
-            "fuzzdb/unix-sensible-file",
+            "https://raw.githubusercontent.com/fuzzdb-project/fuzzdb/master/attack/lfi/JHADDIX_LFI.txt",
+            "fuzzdb/JHADDIX_LFI",
         ),
     ),
     "ssti": (
         PayloadSource(
-            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Server%20Side%20Template%20Injection/Intruder/SSJI.txt",
-            "PAT/SSTI-SSJI",
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Server%20Side%20Template%20Injection/Intruder/ssti.fuzz",
+            "PAT/ssti.fuzz",
         ),
         PayloadSource(
-            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Server%20Side%20Template%20Injection/Intruder/CSTI.txt",
-            "PAT/SSTI-CSTI",
-        ),
-        PayloadSource(
-            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Server%20Side%20Template%20Injection/Intruder/Polyglot.txt",
-            "PAT/SSTI-Polyglot",
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Server%20Side%20Template%20Injection/README.md",
+            "PAT/SSTI-README",
+            markdown=True,
         ),
     ),
     "cmdi": (
         PayloadSource(
-            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Command%20Injection/Intruder/Command-Injection-Generic.txt",
-            "PAT/CMDi-Generic",
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Command%20Injection/Intruder/command_exec.txt",
+            "PAT/command_exec",
+        ),
+        PayloadSource(
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Command%20Injection/Intruder/command-execution-unix.txt",
+            "PAT/command-execution-unix",
         ),
         PayloadSource(
             "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Fuzzing/command-injection-commix.txt",
             "SecLists/commix",
         ),
         PayloadSource(
-            "https://raw.githubusercontent.com/fuzzdb-project/fuzzdb/master/attack/os-cmd-execution/unix-commix.txt",
-            "fuzzdb/unix-commix",
+            "https://raw.githubusercontent.com/fuzzdb-project/fuzzdb/master/attack/os-cmd-execution/command-execution-unix.txt",
+            "fuzzdb/command-execution-unix",
         ),
     ),
     "redirect": (
         PayloadSource(
-            "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Fuzzing/open-redirects.txt",
-            "SecLists/open-redirects",
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Open%20Redirect/Intruder/Open-Redirect-payloads.txt",
+            "PAT/Open-Redirect-payloads",
         ),
         PayloadSource(
-            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Open%20Redirect/Intruders/openredirects.txt",
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Open%20Redirect/Intruder/openredirects.txt",
             "PAT/openredirects",
+        ),
+        PayloadSource(
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/Open%20Redirect/Intruder/open_redirect_wordlist.txt",
+            "PAT/open_redirect_wordlist",
         ),
     ),
     "traversal": (
@@ -164,8 +193,8 @@ PAYLOAD_SOURCES: dict[VulnType, tuple[PayloadSource, ...]] = {
             "SecLists/traversal-Jhaddix",
         ),
         PayloadSource(
-            "https://raw.githubusercontent.com/fuzzdb-project/fuzzdb/master/attack/path-traversal/unix-path-traversal.txt",
-            "fuzzdb/path-traversal-unix",
+            "https://raw.githubusercontent.com/fuzzdb-project/fuzzdb/master/attack/path-traversal/traversals-8-deep-exotic-encoding.txt",
+            "fuzzdb/traversals-deep",
         ),
     ),
     "nosql": (
@@ -207,21 +236,33 @@ LOCAL_SEED: dict[VulnType, tuple[str, ...]] = {
 }
 
 
-def _fetch_url(url: str, timeout: float = 60.0) -> str | None:
+def _fetch_url(url: str, timeout: float = 60.0) -> tuple[str | None, str | None]:
+    """Retorna (texto, motivo_falha)."""
+    headers = {"User-Agent": "VulnDix-PayloadUpdater/2.0"}
+    last_err = ""
     for attempt in range(3):
         try:
-            r = requests.get(
-                url,
-                timeout=timeout,
-                headers={"User-Agent": "VulnDix-PayloadUpdater/1.0"},
-            )
-            if r.status_code == 200:
-                return r.text
+            r = requests.get(url, timeout=timeout, headers=headers, allow_redirects=True)
+            if r.status_code == 200 and r.text.strip():
+                return r.text, None
+            last_err = f"HTTP {r.status_code}"
             if r.status_code == 404:
-                return None
-        except requests.RequestException:
-            pass
-    return None
+                return None, last_err
+        except requests.RequestException as e:
+            last_err = str(e)[:80]
+        if attempt < 2:
+            time.sleep(0.6 * (attempt + 1))
+    return None, last_err or "falha"
+
+
+def fetch_source_text(src: PayloadSource, timeout: float = 60.0) -> tuple[str | None, str]:
+    last_err = "indisponível"
+    for url in (src.url,) + src.fallbacks:
+        text, err = _fetch_url(url, timeout=timeout)
+        if text:
+            return text, url
+        last_err = err or last_err
+    return None, f"{src.label} ({last_err})"
 
 
 def _normalize_line(line: str) -> str | None:
@@ -409,13 +450,14 @@ def update_payloads(
         ok_sources = 0
         for src in sources:
             eprint(f"[*] {cat}: baixando {src.label}...")
-            text = _fetch_url(src.url)
+            text, used_url = fetch_source_text(src)
             if not text:
-                eprint(f"[-] {cat}: indisponível — {src.label}")
+                detail = used_url if used_url and not used_url.startswith("http") else src.label
+                eprint(f"[-] {cat}: indisponível — {detail}")
                 continue
             lines = parse_payload_lines(text, markdown=src.markdown)
             collected = merge_unique(collected, lines)
-            manifest_lines.append(f"{cat}\t{src.label}\t{src.url}\t{len(lines)}")
+            manifest_lines.append(f"{cat}\t{src.label}\t{used_url}\t{len(lines)}")
             ok_sources += 1
             eprint(f"[+] {cat}: +{len(lines)} de {src.label}")
 
@@ -437,7 +479,32 @@ def update_payloads(
     merged_manifest = _merge_manifest(manifest_path, manifest_lines)
     manifest_path.write_text(merged_manifest, encoding="utf-8")
     eprint(f"[+] Manifesto: {manifest_path}")
+
+    wl_ok = update_wordlists()
+    if wl_ok:
+        eprint(f"[+] Wordlists de fuzz: {wl_ok} arquivo(s) em {DEFAULT_WORDLIST_DIR}")
+
     return counts
+
+
+def update_wordlists(dest: Path | None = None) -> int:
+    """Baixa wordlists SecLists para fuzz de diretórios/subdomínios."""
+    out_dir = dest or DEFAULT_WORDLIST_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ok = 0
+    for filename, label, url in WORDLIST_SOURCES:
+        eprint(f"[*] wordlist: baixando {label}...")
+        text, err = _fetch_url(url)
+        if not text:
+            eprint(f"[-] wordlist {filename}: indisponível ({err})")
+            continue
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+        path = out_dir / filename
+        header = f"# VulnDix — {filename} ({label})\n# {url}\n"
+        path.write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
+        ok += 1
+        eprint(f"[+] wordlist: {len(lines)} linhas → {path.name}")
+    return ok
 
 
 def _merge_manifest(manifest_path: Path, new_lines: list[str]) -> str:

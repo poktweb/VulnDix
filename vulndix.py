@@ -16,6 +16,13 @@ from pathlib import Path
 
 from vulndix.crawler import crawl
 from vulndix.fuzzer import fuzz_points
+from vulndix.wordlist_fuzz import (
+    FUZZ_TOKEN,
+    load_wordlist,
+    parse_fuzz_target,
+    resolve_wordlist_path,
+    run_wordlist_fuzz,
+)
 from vulndix.models import ScanConfig, VulnType
 from vulndix.payload_updater import ensure_payloads, update_payloads
 from vulndix.portswigger import ALL_SCAN_CATEGORIES, PORTSWIGGER_CATEGORIES
@@ -52,6 +59,25 @@ def parse_categories(raw: str | None) -> frozenset[VulnType]:
     return frozenset(parts)  # type: ignore[return-value]
 
 
+def parse_match_codes(raw: str | None) -> frozenset[int]:
+    if not raw:
+        from vulndix.wordlist_fuzz import DEFAULT_MATCH_CODES
+
+        return DEFAULT_MATCH_CODES
+    codes: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            codes.add(int(part))
+        except ValueError as e:
+            raise ValueError(f"Código HTTP inválido em --match-codes: {part!r}") from e
+    if not codes:
+        raise ValueError("--match-codes não pode ser vazio.")
+    return frozenset(codes)
+
+
 def parse_header(raw: str) -> tuple[str, str]:
     if ":" not in raw:
         raise ValueError(f"Header inválido (use Nome: Valor): {raw!r}")
@@ -71,8 +97,13 @@ def resolve_categories(args: argparse.Namespace) -> frozenset[VulnType]:
 
 def apply_scan_presets(args: argparse.Namespace) -> None:
     """Ajusta limites padrão quando --all ou --portswigger estão ativos."""
-    if (args.all or args.portswigger) and args.max_payloads == 30:
-        args.max_payloads = 40
+    if args.all or args.portswigger:
+        if args.max_payloads == 30:
+            args.max_payloads = 8
+        if args.delay_ms == 100:
+            args.delay_ms = 0
+        if args.threads == 5:
+            args.threads = 30
     if args.portswigger and args.max_pages == 150:
         args.max_pages = 40
 
@@ -94,11 +125,15 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
         verify_tls=not args.insecure,
         fuzz_headers=args.fuzz_headers or full_scan,
         portswigger_mode=args.portswigger,
+        fast_fuzz=full_scan,
+        probe_timeout_s=8.0 if full_scan else 12.0,
+        probe_max_body_bytes=98304,
+        fuzz_category_cap=6 if full_scan else 0,
         categories=categories,
         max_payloads=args.max_payloads,
         delay_ms=args.delay_ms,
         threads=args.threads,
-        verify_curl=not args.no_verify_curl,
+        verify_curl=not args.no_verify_curl and not full_scan,
         payload_dir=args.payload_dir,
         user_agent=args.user_agent,
         login_url=args.login_url,
@@ -110,6 +145,13 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
         cookies=list(args.cookie or []),
         extra_headers=extra_headers,
         token=args.token,
+        wordlist_path=args.wordlist,
+        wordlist_method=args.fuzz_method,
+        fuzz_match_codes=parse_match_codes(args.match_codes),
+        fuzz_filter_baseline=not args.no_fuzz_baseline_filter,
+        wordlist_max_lines=args.wordlist_max or 0,
+        discover_params=not args.no_discover_params,
+        spa_wait_ms=args.spa_wait_ms,
     )
 
 
@@ -119,7 +161,46 @@ def build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog="Scan completo: --all | Labs Academy: --portswigger | Doc: Comandos.txt",
     )
-    p.add_argument("-u", "--url", default=None, help="URL inicial (lab ou alvo).")
+    p.add_argument(
+        "-u",
+        "--url",
+        default=None,
+        help=(
+            "URL alvo ou template com FUZZ: "
+            "https://site/FUZZ (dirs), https://FUZZ.site.com ou FUZZ.site.com (subdomínios)."
+        ),
+    )
+    p.add_argument(
+        "-w",
+        "--wordlist",
+        default=None,
+        metavar="FILE",
+        help="Wordlist para fuzz de dirs/subdomínios (ou atalho: common-dirs, common-subdomains).",
+    )
+    p.add_argument(
+        "--fuzz-method",
+        default="GET",
+        choices=("GET", "HEAD"),
+        help="Método HTTP no fuzz com wordlist.",
+    )
+    p.add_argument(
+        "--match-codes",
+        default=None,
+        metavar="CODES",
+        help="Códigos HTTP a exibir (padrão: 200,204,301,302,307,401,403).",
+    )
+    p.add_argument(
+        "--no-fuzz-baseline-filter",
+        action="store_true",
+        help="Não ocultar respostas iguais à baseline (404 genérico).",
+    )
+    p.add_argument(
+        "--wordlist-max",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Limitar linhas da wordlist (0 = todas).",
+    )
     p.add_argument(
         "--all",
         action="store_true",
@@ -140,10 +221,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--ignore-robots", action="store_true")
     p.add_argument("--insecure", action="store_true")
     p.add_argument("--fuzz-headers", action="store_true")
+    p.add_argument(
+        "--no-discover-params",
+        action="store_true",
+        help="Não criar ?id=, ?page=, etc. quando o crawl não achar parâmetros (SPAs).",
+    )
+    p.add_argument(
+        "--spa-wait-ms",
+        type=int,
+        default=2500,
+        metavar="MS",
+        help="Espera extra após cada página para JS/API (0=desliga).",
+    )
     p.add_argument("--categories", default=None, help=f"{','.join(ALL_CATEGORIES)}")
     p.add_argument("--max-payloads", type=int, default=30)
     p.add_argument("--delay-ms", type=int, default=100)
-    p.add_argument("-j", "--threads", type=int, default=5)
+    p.add_argument("-j", "--threads", type=int, default=5, help="Paralelismo do fuzz ( --all usa 20 ).")
     p.add_argument("--no-verify-curl", action="store_true")
     p.add_argument("--payload-dir", default=None)
     p.add_argument(
@@ -181,6 +274,42 @@ def main() -> int:
         dest = Path(args.payload_dir) if args.payload_dir else None
         counts = update_payloads(dest, cats, max_per_category=args.payloads_cache_max)
         return 0 if sum(counts.values()) > 0 else 1
+
+    if not args.url and not args.update_payloads:
+        eprint("[-] Informe -u/--url ou use --update-payloads.")
+        return 2
+
+    wordlist_mode = bool(args.wordlist) or (
+        args.url and FUZZ_TOKEN in args.url.upper()
+    )
+    if wordlist_mode:
+        if not args.i_understand:
+            eprint("[-] Adicione --i-understand para confirmar autorização no alvo.")
+            return 2
+        if not args.wordlist:
+            eprint("[-] Fuzz com FUZZ exige -w/--wordlist.")
+            return 2
+        if not args.url:
+            eprint("[-] Informe -u com FUZZ na URL.")
+            return 2
+        try:
+            config = build_config(args)
+            wl_path = resolve_wordlist_path(args.wordlist)
+            target = parse_fuzz_target(args.url)
+            words = load_wordlist(wl_path, max_lines=config.wordlist_max_lines)
+        except (ValueError, FileNotFoundError) as e:
+            eprint(f"[-] {e}")
+            return 2
+        eprint(f"[*] Modo wordlist ({target.mode}): {len(words)} entradas de {wl_path.name}")
+        out_path = Path(args.output) if args.output else None
+        run_wordlist_fuzz(
+            config,
+            target,
+            words,
+            output_path=out_path,
+            jsonl=args.jsonl,
+        )
+        return 0
 
     if not args.url:
         eprint("[-] Informe -u/--url ou use --update-payloads.")

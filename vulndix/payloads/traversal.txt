@@ -1,5 +1,5 @@
 # VulnDix — traversal.txt (gerado automaticamente)
-# Total: 500 payloads | Fontes online: 1
+# Total: 500 payloads | Fontes online: 2
 # Repositórios: swisskyrepo/PayloadsAllTheThings, danielmiessler/SecLists, fuzzdb-project/fuzzdb
 ../
 ..%2f

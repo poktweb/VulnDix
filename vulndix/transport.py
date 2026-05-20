@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
 
 import requests
 import urllib3
+from requests.adapters import HTTPAdapter
 
 from vulndix.models import BaselineResponse, InjectionPoint, ProbeResponse, ScanConfig
 
@@ -39,8 +40,17 @@ def normalize_request_url(url: str) -> str:
     return urlunparse((p.scheme, p.netloc, path, p.params, query, p.fragment))
 
 
-def build_session(config: ScanConfig, cookies_from_browser: list[dict[str, Any]] | None = None) -> requests.Session:
+def build_session(
+    config: ScanConfig,
+    cookies_from_browser: list[dict[str, Any]] | None = None,
+    *,
+    pool_size: int = 0,
+) -> requests.Session:
     sess = requests.Session()
+    pool = pool_size or max(10, config.threads * 2)
+    adapter = HTTPAdapter(pool_connections=pool, pool_maxsize=pool, max_retries=0)
+    sess.mount("https://", adapter)
+    sess.mount("http://", adapter)
     sess.headers.update({"User-Agent": config.user_agent})
     sess.headers.update(config.extra_headers)
     if config.token:
@@ -102,20 +112,52 @@ def apply_payload(point: InjectionPoint, payload: str) -> tuple[str, dict[str, s
     return url, headers, point.body
 
 
+def _read_limited_response(r: requests.Response, max_bytes: int) -> tuple[str, int]:
+    """Lê só o necessário do corpo (scanners profissionais limitam buffer)."""
+    cl_hdr = r.headers.get("Content-Length", "")
+    try:
+        declared = int(cl_hdr) if cl_hdr.isdigit() else 0
+    except (TypeError, ValueError):
+        declared = 0
+
+    if max_bytes <= 0 or not hasattr(r, "iter_content"):
+        text = r.text or ""
+        return text, declared or len(text)
+
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in r.iter_content(chunk_size=16384):
+        if not chunk:
+            continue
+        chunks.append(chunk)
+        total += len(chunk)
+        if total >= max_bytes:
+            break
+    raw = b"".join(chunks)
+    text = raw.decode(r.encoding or "utf-8", errors="replace")
+    full_len = declared if declared > 0 else max(len(text), total)
+    return text, full_len
+
+
 def send_probe(
     session: requests.Session,
     point: InjectionPoint,
     payload: str,
-    timeout: float = 30.0,
+    timeout: float = 12.0,
+    *,
+    max_body_bytes: int = 98304,
 ) -> ProbeResponse:
     url, headers, body = apply_payload(point, payload)
     url = normalize_request_url(url)
     method = point.method.upper()
     hdrs = sanitize_headers({**dict(session.headers), **headers})
     start = time.perf_counter()
+    stream_kw = {"stream": True}
     try:
         if method == "GET":
-            r = session.get(url, headers=hdrs, timeout=timeout, allow_redirects=False)
+            r = session.get(
+                url, headers=hdrs, timeout=timeout, allow_redirects=False, **stream_kw
+            )
         elif point.location == "json" and isinstance(body, dict):
             r = session.request(
                 method,
@@ -124,11 +166,18 @@ def send_probe(
                 json=body,
                 timeout=timeout,
                 allow_redirects=False,
+                **stream_kw,
             )
         elif isinstance(body, dict):
             safe_body = {k: _latin1_safe(str(v)) for k, v in body.items()}
             r = session.request(
-                method, url, headers=hdrs, data=safe_body, timeout=timeout, allow_redirects=False
+                method,
+                url,
+                headers=hdrs,
+                data=safe_body,
+                timeout=timeout,
+                allow_redirects=False,
+                **stream_kw,
             )
         elif point.location == "xml" and isinstance(body, str):
             r = session.request(
@@ -138,19 +187,26 @@ def send_probe(
                 data=body.encode("utf-8"),
                 timeout=timeout,
                 allow_redirects=False,
+                **stream_kw,
             )
         else:
-            r = session.request(method, url, headers=hdrs, timeout=timeout, allow_redirects=False)
+            r = session.request(
+                method, url, headers=hdrs, timeout=timeout, allow_redirects=False, **stream_kw
+            )
     except requests.RequestException as e:
         elapsed = (time.perf_counter() - start) * 1000
         return ProbeResponse(status=0, body=str(e), elapsed_ms=elapsed, headers={})
     elapsed = (time.perf_counter() - start) * 1000
-    text = r.text or ""
+    text, full_len = _read_limited_response(r, max_body_bytes)
+    close = getattr(r, "close", None)
+    if callable(close):
+        close()
     return ProbeResponse(
         status=r.status_code,
         body=text,
         elapsed_ms=elapsed,
         headers=dict(r.headers),
+        content_length=full_len,
     )
 
 

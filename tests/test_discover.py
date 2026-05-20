@@ -2,6 +2,7 @@ from vulndix.discover import (
     dedupe_points,
     normalize_url_template,
     points_from_url,
+    synthetic_probe_points,
 )
 
 
@@ -16,6 +17,19 @@ def test_points_from_url_query():
     names = {p.name for p in pts}
     assert "id" in names
     assert "q" in names
+
+
+def test_synthetic_probe_points():
+    pts = synthetic_probe_points(
+        ["https://example.com/", "https://example.com/about"],
+        {},
+        "example.com",
+        max_endpoints=2,
+    )
+    names = {p.name for p in pts}
+    assert "id" in names
+    assert "productId" in names
+    assert any(p.location == "query" for p in pts)
 
 
 def test_dedupe_points():

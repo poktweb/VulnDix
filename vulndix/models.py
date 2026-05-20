@@ -64,10 +64,11 @@ class ProbeResponse:
     body: str
     elapsed_ms: float
     headers: dict[str, str] = field(default_factory=dict)
+    content_length: int = 0
 
     @property
     def body_len(self) -> int:
-        return len(self.body)
+        return self.content_length if self.content_length > 0 else len(self.body)
 
 
 @dataclass
@@ -103,6 +104,10 @@ class ScanConfig:
     verify_tls: bool = True
     fuzz_headers: bool = False
     portswigger_mode: bool = False
+    fast_fuzz: bool = False
+    probe_timeout_s: float = 12.0
+    probe_max_body_bytes: int = 98304
+    fuzz_category_cap: int = 0
     categories: frozenset[VulnType] = field(
         default_factory=lambda: frozenset(
             {
@@ -134,3 +139,10 @@ class ScanConfig:
     extra_headers: dict[str, str] = field(default_factory=dict)
     token: str | None = None
     xss_marker: str = ""
+    wordlist_path: str | None = None
+    wordlist_method: str = "GET"
+    fuzz_match_codes: frozenset[int] | None = None
+    fuzz_filter_baseline: bool = True
+    wordlist_max_lines: int = 0
+    discover_params: bool = True
+    spa_wait_ms: int = 2500

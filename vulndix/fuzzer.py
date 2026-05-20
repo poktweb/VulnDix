@@ -1,18 +1,33 @@
 from __future__ import annotations
 
+import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from threading import Lock
 
 from vulndix.detectors import detect_all
 from vulndix.detectors.sqli import confirm_boolean_sqli
+from vulndix.fuzz_plan import (
+    categories_for_point,
+    dedupe_injection_points,
+    estimate_fuzz_tasks,
+    filter_points_for_fast_fuzz,
+    prioritize_points,
+)
 from vulndix.idor import scan_idor
 from vulndix.passive import run_passive_checks
 from vulndix.payload_updater import DEFAULT_PAYLOAD_DIR, parse_payload_lines
 from vulndix.filters import filter_points
-from vulndix.models import Finding, InjectionPoint, PageSample, ScanConfig, VulnType
+from vulndix.models import (
+    BaselineResponse,
+    Finding,
+    InjectionPoint,
+    PageSample,
+    ScanConfig,
+    VulnType,
+)
 from vulndix.portswigger import PRIORITY_PAYLOADS
 from vulndix.reporter import eprint, emit_jsonl, print_summary, write_report
 from vulndix.transport import (
@@ -24,7 +39,9 @@ from vulndix.transport import (
 )
 
 
-def _order_payloads(cat: VulnType, lines: list[str], limit: int) -> list[str]:
+def _order_payloads(
+    cat: VulnType, lines: list[str], limit: int, *, fast: bool = False
+) -> list[str]:
     priority = PRIORITY_PAYLOADS.get(cat, ())
     ordered: list[str] = []
     seen: set[str] = set()
@@ -36,6 +53,9 @@ def _order_payloads(cat: VulnType, lines: list[str], limit: int) -> list[str]:
         if line not in seen:
             ordered.append(line)
             seen.add(line)
+    if fast:
+        cap = min(limit, max(5, len(priority) + 2))
+        return ordered[:cap]
     return ordered[:limit]
 
 
@@ -56,7 +76,9 @@ def load_payloads(config: ScanConfig) -> dict[VulnType, list[str]]:
         else:
             lines = list(PRIORITY_PAYLOADS.get(cat, ()))
         if lines:
-            out[cat] = _order_payloads(cat, lines, config.max_payloads)
+            out[cat] = _order_payloads(
+                cat, lines, config.max_payloads, fast=config.fast_fuzz
+            )
     return out
 
 
@@ -64,6 +86,45 @@ def prepare_payload(payload: str, config: ScanConfig) -> str:
     if "{{MARKER}}" in payload and config.xss_marker:
         return payload.replace("{{MARKER}}", config.xss_marker)
     return payload
+
+
+def _collect_baselines(
+    points: list[InjectionPoint],
+    config: ScanConfig,
+    browser_cookies: list[dict] | None,
+) -> dict[tuple[str, str, str, str], BaselineResponse]:
+    cache: dict[tuple[str, str, str, str], BaselineResponse] = {}
+    timeout = config.probe_timeout_s
+    max_body = config.probe_max_body_bytes
+    workers = min(config.threads, max(4, min(24, len(points) // 4 + 4)))
+    thread_local = threading.local()
+
+    def session_for_thread() -> object:
+        if not getattr(thread_local, "session", None):
+            thread_local.session = build_session(config, browser_cookies, pool_size=8)
+        return thread_local.session
+
+    def one(pt: InjectionPoint) -> tuple[tuple[str, str, str, str], BaselineResponse]:
+        sess = session_for_thread()
+        probe = send_probe(
+            sess,
+            pt,
+            pt.baseline_value or "",
+            timeout=timeout,
+            max_body_bytes=max_body,
+        )
+        return pt.key(), baseline_from_probe(probe)
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = [ex.submit(one, pt) for pt in points]
+        done = 0
+        for fut in futs:
+            key, baseline = fut.result()
+            cache[key] = baseline
+            done += 1
+            if done == len(points) or done % 25 == 0:
+                eprint(f"[*] Baselines: {done}/{len(points)}")
+    return cache
 
 
 def fuzz_points(
@@ -84,19 +145,43 @@ def fuzz_points(
     scope_host = urlparse(config.url).hostname or ""
 
     raw_count = len(points)
-    points = filter_points(points)
-    if raw_count != len(points):
-        eprint(f"[*] Ignorados {raw_count - len(points)} parâmetro(s) de framework/analytics")
+    points = dedupe_injection_points(filter_points(points))
+    if config.fast_fuzz:
+        before = len(points)
+        points = filter_points_for_fast_fuzz(points)
+        if before != len(points):
+            eprint(f"[*] Modo rápido: {before - len(points)} ponto(s) de header omitidos")
 
-    session = build_session(config, browser_cookies)
+    dupes = raw_count - len(points)
+    if dupes > 0:
+        eprint(f"[*] {dupes} ponto(s) duplicado(s) ou de framework removidos")
+
+    points = prioritize_points(points)
+
+    session = build_session(config, browser_cookies, pool_size=config.threads * 2)
+    thread_local = threading.local()
+
+    def thread_session():
+        if not getattr(thread_local, "session", None):
+            thread_local.session = build_session(
+                config, browser_cookies, pool_size=8
+            )
+        return thread_local.session
+
     payloads_map = load_payloads(config)
     findings: list[Finding] = []
     seen: set[tuple[str, str, str, str]] = set()
+    skip_pair: set[tuple[tuple[str, str, str, str], str]] = set()
     lock = Lock()
+    probes_done = 0
 
     passive = run_passive_checks(page_samples or [], config)
     findings.extend(passive)
+    passive_urls: set[str] = set()
     for pf in passive:
+        if pf.type == "clickjacking" and pf.endpoint in passive_urls:
+            continue
+        passive_urls.add(pf.endpoint)
         eprint(f"[+] {pf.type.upper()} (passivo) — {pf.evidence[:80]}")
 
     idor_findings = scan_idor(session, points, config)
@@ -107,12 +192,35 @@ def fuzz_points(
     for cat, pls in payloads_map.items():
         eprint(f"[*] Payloads {cat}: {len(pls)}")
 
-    def work(point: InjectionPoint, vuln_type: VulnType, payload: str) -> Finding | None:
-        time.sleep(config.delay_ms / 1000.0)
+    eprint(f"[*] Medindo baselines ({len(points)} pontos)...")
+    baseline_cache = _collect_baselines(points, config, browser_cookies)
+
+    timeout = config.probe_timeout_s
+    max_body = config.probe_max_body_bytes
+    per_thread_delay = config.delay_ms / 1000.0 / max(1, config.threads)
+    cat_cap = config.fuzz_category_cap if config.fast_fuzz else 0
+
+    def run_probe(
+        point: InjectionPoint, vuln_type: VulnType, payload: str
+    ) -> Finding | None:
+        nonlocal probes_done
+
+        if per_thread_delay > 0:
+            time.sleep(per_thread_delay)
+
         prepared = prepare_payload(payload, config)
-        baseline_probe = send_probe(session, point, point.baseline_value or "")
-        baseline = baseline_from_probe(baseline_probe)
-        probe = send_probe(session, point, prepared)
+        baseline = baseline_cache[point.key()]
+        sess = thread_session()
+        probe = send_probe(
+            sess,
+            point,
+            prepared,
+            timeout=timeout,
+            max_body_bytes=max_body,
+        )
+        with lock:
+            probes_done += 1
+
         result = detect_all(
             vuln_type,
             point,
@@ -122,48 +230,117 @@ def fuzz_points(
             xss_marker=config.xss_marker,
             scope_host=scope_host,
         )
-        if vuln_type == "sqli":
-            confirmed = confirm_boolean_sqli(session, point, prepared, baseline, probe)
+        if vuln_type == "sqli" and result:
+            confirmed = confirm_boolean_sqli(sess, point, prepared, baseline, probe)
             if confirmed:
                 result = confirmed
         if not result:
             return None
+
         if config.verify_curl:
-            result.curl = build_curl_command(session, point, prepared, not config.verify_tls)
+            result.curl = build_curl_command(sess, point, prepared, not config.verify_tls)
             verify_with_curl(result.curl)
+
         sig = (result.type, result.param, point.url_template or point.url, result.payload)
         with lock:
             if sig in seen:
                 return None
             seen.add(sig)
+            if result.confidence in ("high", "medium"):
+                skip_pair.add((point.key(), vuln_type))
             findings.append(result)
         eprint(f"[+] {result.type.upper()} {result.param} — {result.evidence[:90]}")
         return result
 
-    tasks: list[tuple[InjectionPoint, VulnType, str]] = []
+    def fuzz_one_point(point: InjectionPoint) -> None:
+        if config.fast_fuzz:
+            cats = categories_for_point(
+                point, config.categories, category_cap=cat_cap
+            )
+        else:
+            cats = tuple(
+                c
+                for c in categories_for_point(point, config.categories, category_cap=0)
+            )
+        for vuln_type in cats:
+            pair = (point.key(), vuln_type)
+            with lock:
+                if pair in skip_pair:
+                    continue
+            payloads = payloads_map.get(vuln_type, ())
+            for payload in payloads:
+                with lock:
+                    if pair in skip_pair:
+                        break
+                try:
+                    run_probe(point, vuln_type, payload)
+                except Exception as e:
+                    eprint(f"[-] Erro no fuzz ({point.name}/{vuln_type}): {e}")
+                    break
+
+    naive = 0
     for point in points:
         for vuln_type in config.categories:
             if vuln_type in ("info", "clickjacking", "csrf", "cors", "idor"):
                 continue
-            for payload in payloads_map.get(vuln_type, []):
-                tasks.append((point, vuln_type, payload))
+            naive += len(payloads_map.get(vuln_type, ()))
 
-    eprint(f"[*] Total de probes: {len(tasks)} (threads={config.threads})")
+    planned = estimate_fuzz_tasks(points, config, payloads_map)
+    saved_plan = naive - planned if naive > planned else 0
 
-    with ThreadPoolExecutor(max_workers=max(1, config.threads)) as ex:
-        futs = [ex.submit(work, pt, vt, pl) for pt, vt, pl in tasks]
-        for fut in as_completed(futs):
-            try:
-                fut.result()
-            except Exception as e:
-                eprint(f"[-] Erro no fuzz: {e}")
+    eprint(
+        f"[*] Plano: até {planned} probes"
+        + (f" ({saved_plan} a menos que varredura ingênua)" if saved_plan else "")
+        + f" | threads={config.threads} | timeout={timeout}s | body≤{max_body // 1024}KB"
+    )
+    if config.fast_fuzz:
+        eprint(
+            "[*] Turbo: categorias por parâmetro, cap "
+            f"{cat_cap or 'off'}, parada ao achar falha na categoria"
+        )
+
+    t0 = time.perf_counter()
+    max_inflight = max(16, min(len(points), config.threads * 2))
+
+    with ThreadPoolExecutor(max_workers=max(1, max_inflight)) as ex:
+        pending = {ex.submit(fuzz_one_point, pt) for pt in points}
+        last_log = 0
+        progress_step = max(50, planned // 25 or 50)
+        while pending:
+            done_set, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for fut in done_set:
+                try:
+                    fut.result()
+                except Exception as e:
+                    eprint(f"[-] Erro no ponto: {e}")
+            with lock:
+                pd = probes_done
+            if pd - last_log >= progress_step or not pending:
+                last_log = pd
+                elapsed = time.perf_counter() - t0
+                rate = pd / elapsed if elapsed > 0 else 0.0
+                remain = max(0, planned - pd)
+                eta_s = remain / rate if rate > 0 else 0.0
+                pct = min(100.0, 100.0 * pd / planned) if planned else 100.0
+                eprint(
+                    f"[*] Fuzz: {pd} probes (~{pct:.0f}% do plano) "
+                    f"— {rate:.1f}/s, ETA ~{max(0, int(eta_s // 60))} min"
+                )
+
+    elapsed = time.perf_counter() - t0
+    with lock:
+        total_probes = probes_done
+    eprint(
+        f"[*] Fuzz finalizado: {total_probes} probes em {elapsed:.1f}s "
+        f"({total_probes / elapsed:.1f}/s)" if elapsed > 0 else ""
+    )
 
     print_summary(
         findings,
         config,
         pages_crawled=pages_crawled,
         points_tested=len(points),
-        probes_run=len(tasks),
+        probes_run=total_probes,
     )
 
     if findings:
@@ -177,8 +354,9 @@ def fuzz_points(
                 meta={
                     "pages_crawled": pages_crawled,
                     "injection_points": len(points),
-                    "probes": len(tasks),
+                    "probes": total_probes,
                     "portswigger_mode": config.portswigger_mode,
+                    "fast_fuzz": config.fast_fuzz,
                 },
             )
             eprint(f"[+] Relatório salvo: {output_path}")

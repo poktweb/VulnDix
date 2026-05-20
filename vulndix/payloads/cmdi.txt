@@ -1,5 +1,5 @@
 # VulnDix — cmdi.txt (gerado automaticamente)
-# Total: 500 payloads | Fontes online: 1
+# Total: 500 payloads | Fontes online: 4
 # Repositórios: swisskyrepo/PayloadsAllTheThings, danielmiessler/SecLists, fuzzdb-project/fuzzdb
 ;id
 |id

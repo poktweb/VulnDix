@@ -1,4 +1,6 @@
-# Seeds PortSwigger — Host header attacks
+# VulnDix — host_header.txt (gerado automaticamente)
+# Total: 3 payloads | Fontes online: 0
+# Repositórios: swisskyrepo/PayloadsAllTheThings, danielmiessler/SecLists, fuzzdb-project/fuzzdb
 127.0.0.1
 localhost
 evil.example.test

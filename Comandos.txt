@@ -53,7 +53,10 @@ MODO ALL (scan completo — qualquer alvo)
   Ativa as 16 categorias sem listar --categories:
     fuzz: sqli, xss, nosql, ssrf, xxe, lfi, traversal, cmdi, ssti, redirect, host_header
     passivo: idor, cors, csrf, clickjacking, info
-  Também liga --fuzz-headers e --ignore-robots; usa 40 payloads/categoria.
+  Também liga --fuzz-headers e --ignore-robots.
+  Modo turbo (--all): 30 threads, 8 payloads/cat., corpo limitado a 96KB,
+  categorias por parâmetro (máx. 6), parada ao achar falha na categoria,
+  dedupe de pontos, payloads prioritários primeiro (menos probes que antes).
   Baixa listas faltantes do GitHub na 1ª execução.
 
 
@@ -64,6 +67,25 @@ LABS PORTSWIGGER (recomendado para Academy)
   Igual --all + enfileira rotas típicas dos labs:
   /filter?category=, /product?productId=, /login, /admin, etc.
   Limite padrão: 40 páginas (labs são pequenos).
+
+
+FUZZ DE DIRETÓRIOS E SUBDOMÍNIOS (wordlist)
+-------------------------------------------
+  Estilo ffuf: marcador FUZZ na URL + wordlist (-w).
+
+  Diretórios:
+    python vulndix.py -u https://alvo.com/FUZZ -w common-dirs --i-understand
+    python vulndix.py -u https://alvo.com/FUZZ/ -w C:\listas\dirs.txt --i-understand -o dirs.json
+
+  Subdomínios:
+    python vulndix.py -u https://FUZZ.alvo.com/ -w common-subdomains --i-understand
+    python vulndix.py -u FUZZ.alvo.com -w subdomains.txt --i-understand
+
+  Opções: --fuzz-method GET|HEAD | --match-codes 200,301,403 |
+           --no-fuzz-baseline-filter | --wordlist-max N | -j threads
+
+  Atalhos -w: common-dirs, common-subdomains (em vulndix/payloads/wordlists/).
+  Baixar listas SecLists: python vulndix.py --update-payloads (inclui wordlists).
 
 
 COMANDOS BÁSICOS
@@ -244,7 +266,9 @@ PAYLOADS (automático na execução)
 
   python vulndix.py -u https://alvo.com/ --skip-payload-sync --i-understand
 
-  --max-payloads (padrão 30; --all e --portswigger usam 40) = quantos payloads USAR no scan.
+  --max-payloads (padrão 30; --all/--portswigger usam 15 prioritários) = payloads por categoria.
+  --delay-ms (padrão 100; --all/--portswigger usam 0). -j (threads): 20 no --all.
+  Progresso: Fuzz: 500/4500 (11%) com probes/s e ETA (bem menos que 33k probes).
   --payloads-cache-max (padrão 500) = quantos SALVAR ao baixar do GitHub.
 
 
@@ -304,5 +328,63 @@ SOLUÇÃO DE PROBLEMAS
 
 Labs PortSwigger NÃO cobertos por este scanner (manual):
   JWT, OAuth, request smuggling, race conditions, WebSockets, file upload, business logic
+
+
+SUGESTÕES PARA TESTAR E ACHAR FALHAS (alvos autorizados)
+---------------------------------------------------------
+  Use SOMENTE em pentest, bug bounty no escopo ou ambiente seu.
+  Substitua SEU-ALVO / SEU-DOMINIO pela URL permitida no programa.
+
+  Antes do primeiro scan (internet):
+
+  python vulndix.py --update-payloads
+
+  1) Scan DAST completo (recomendado para app web):
+
+  python vulndix.py -u https://SEU-ALVO.com/ --all -o report.json --i-understand -j 20
+
+  Alvo lento ou instável (menos threads + delay):
+
+  python vulndix.py -u https://SEU-ALVO.com/ --all -o report.json --i-understand -j 10 --delay-ms 200
+
+  2) Foco nas falhas mais comuns (mais rápido):
+
+  python vulndix.py -u https://SEU-ALVO.com/ --categories xss,sqli,ssrf,redirect,lfi,cors,idor -o report.json --i-understand -j 15
+
+  3) Descobrir paths antes do scan:
+
+  python vulndix.py -u https://SEU-ALVO.com/FUZZ -w common-dirs --i-understand -o dirs.json -j 30
+
+  Depois rode o scan DAST nas URLs interessantes (/admin, /api, etc.).
+
+  4) Subdomínios (escopo BB com wildcard, ex. *.dominio.com):
+
+  python vulndix.py -u https://FUZZ.SEU-DOMINIO.com/ -w common-subdomains --i-understand -o subs.json -j 30
+
+  5) Labs PortSwigger (treino, não é site “real”):
+
+  python vulndix.py -u https://SEU-LAB.web-security-academy.net/ --portswigger -o report.json --i-understand
+
+  O que observar:
+  • STDERR: linhas [+] em tempo real durante o fuzz
+  • Final: resumo formatado no terminal
+  • report.json: tipo, endpoint, payload, evidência e curl (só se houver achados)
+
+  Bug bounty: limite-se ao domínio/path do programa (HackerOne, Bugcrowd, etc.).
+
+
+CRAWL EM SITES SPA (0 pontos de injeção)
+----------------------------------------
+  Sites só com JavaScript (ex. marketing Next.js) não expõem ?id= no HTML.
+  O VulnDix agora:
+  • espera rede/JS (--spa-wait-ms, padrão 2500 ms)
+  • extrai links do DOM renderizado + sitemap.xml
+  • se não achar parâmetros, testa ?id=1, ?page=1, ?productId=1, … nas rotas vistas
+
+  Mensagem esperada:
+    [*] Descoberta de parâmetros: +28 ponto(s) sintéticos (?id=, ?page=, …)
+
+  Desativar: --no-discover-params
+  Mais páginas: --max-pages 80 --spa-wait-ms 4000
 
 ================================================================================
