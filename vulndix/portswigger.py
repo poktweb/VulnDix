@@ -24,6 +24,11 @@ ALL_SCAN_CATEGORIES: frozenset[VulnType] = frozenset(
         "info",
         "clickjacking",
         "csrf",
+        "crlf",
+        "ldap",
+        "sec_headers",
+        "cookie_sec",
+        "api_exposed",
     }
 )
 
@@ -113,5 +118,19 @@ PRIORITY_PAYLOADS: dict[VulnType, tuple[str, ...]] = {
         "127.0.0.1",
         "localhost",
         "evil.example.test",
+    ),
+    "crlf": (
+        "%0d%0aSet-Cookie:%20injected=1",
+        "%0d%0aX-Injected:%201",
+        "\r\nSet-Cookie: injected=1",
+        "%0aSet-Cookie:%20injected=1",
+    ),
+    "ldap": (
+        "*",
+        "*)(&",
+        "*)(uid=*))(|(uid=*",
+        "admin)(&)",
+        "x' or '1'='1",
+        ")(cn=))",
     ),
 }

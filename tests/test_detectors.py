@@ -1,9 +1,12 @@
 from unittest.mock import MagicMock
 
+from vulndix.detectors.crlf import detect as crlf_detect
+from vulndix.detectors.ldap import detect as ldap_detect
 from vulndix.detectors.sqli import confirm_boolean_sqli, detect as sqli_detect
 from vulndix.detectors.xss import detect as xss_detect
+from vulndix.passive import run_passive_checks
 from vulndix.filters import should_skip_param
-from vulndix.models import BaselineResponse, InjectionPoint, ProbeResponse
+from vulndix.models import BaselineResponse, InjectionPoint, PageSample, ProbeResponse, ScanConfig
 
 
 def _baseline(snippet: str = "") -> BaselineResponse:
@@ -141,5 +144,54 @@ def test_sqli_confirm_boolean_high(monkeypatch):
     assert f is not None
     assert f.confidence == "high"
     assert "booleano" in f.evidence.lower()
+
+
+def test_crlf_injected_header():
+    pt = InjectionPoint(
+        url="https://example.com/?q=1",
+        method="GET",
+        location="query",
+        name="q",
+    )
+    probe = ProbeResponse(
+        status=200,
+        body="ok",
+        elapsed_ms=100,
+        headers={"Set-Cookie": "injected=1; Path=/"},
+    )
+    f = crlf_detect(pt, "%0d%0aSet-Cookie: injected=1", _baseline(), probe)
+    assert f is not None
+    assert f.type == "crlf"
+
+
+def test_ldap_error_message():
+    pt = InjectionPoint(
+        url="https://example.com/?user=admin",
+        method="GET",
+        location="query",
+        name="user",
+    )
+    probe = ProbeResponse(
+        status=500,
+        body="javax.naming.NamingException: Invalid DN syntax",
+        elapsed_ms=100,
+    )
+    f = ldap_detect(pt, "*)(uid=*", _baseline(), probe)
+    assert f is not None
+    assert f.type == "ldap"
+
+
+def test_passive_sec_headers():
+    pages = [
+        PageSample(
+            url="https://example.com/",
+            status=200,
+            headers={"Content-Type": "text/html"},
+            body="<html></html>",
+        )
+    ]
+    config = ScanConfig(url="https://example.com/", categories=frozenset({"sec_headers"}))
+    findings = run_passive_checks(pages, config)
+    assert any(f.type == "sec_headers" for f in findings)
 
 

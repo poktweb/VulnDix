@@ -16,7 +16,12 @@ INFO_PATTERNS = (
     (r"\/var\/www\/", "Caminho de servidor exposto"),
     (r"\/home\/", "Caminho Linux exposto"),
     (r"C:\\\\inetpub", "Caminho Windows exposto"),
+    (r"AKIA[0-9A-Z]{16}", "Possível chave AWS exposta"),
+    (r"-----BEGIN (RSA |EC )?PRIVATE KEY-----", "Chave privada no corpo"),
+    (r"api[_-]?key\s*[:=]\s*['\"][a-zA-Z0-9]{16,}", "API key em texto"),
 )
+
+JWT_WEAK_RE = re.compile(r'["\']alg["\']\s*:\s*["\']none["\']', re.I)
 
 CSRF_FORM_RE = re.compile(r"<form[^>]*method\s*=\s*['\"]?post", re.I)
 
@@ -80,6 +85,77 @@ def run_passive_checks(pages: list[PageSample], config: ScanConfig) -> list[Find
                                 f"CORS reflete origem com credenciais: {acao[:80]}",
                             )
                         )
+
+        # Security headers ausentes
+        if "sec_headers" in config.categories:
+            missing: list[str] = []
+            if not hdrs.get("strict-transport-security"):
+                missing.append("HSTS")
+            csp = hdrs.get("content-security-policy", "")
+            if not csp:
+                missing.append("CSP")
+            if not hdrs.get("x-content-type-options"):
+                missing.append("X-Content-Type-Options")
+            if not hdrs.get("referrer-policy"):
+                missing.append("Referrer-Policy")
+            if not hdrs.get("permissions-policy") and not hdrs.get("feature-policy"):
+                missing.append("Permissions-Policy")
+            if missing:
+                key = f"sec_headers:{page.url}:{','.join(missing)}"
+                if key not in seen:
+                    seen.add(key)
+                    findings.append(
+                        make_finding(
+                            "sec_headers",
+                            _fake_point(page.url, "headers"),
+                            "(passivo)",
+                            "low",
+                            f"Cabeçalhos de segurança ausentes: {', '.join(missing)}",
+                        )
+                    )
+
+        # Cookies inseguros (Set-Cookie na resposta)
+        if "cookie_sec" in config.categories:
+            for raw_name, raw_val in page.headers.items():
+                if raw_name.lower() != "set-cookie":
+                    continue
+                for cookie_chunk in raw_val.split(","):
+                    c_low = cookie_chunk.strip().lower()
+                    issues: list[str] = []
+                    if "secure" not in c_low and page.url.startswith("https"):
+                        issues.append("sem Secure")
+                    if "httponly" not in c_low:
+                        issues.append("sem HttpOnly")
+                    if "samesite" not in c_low:
+                        issues.append("sem SameSite")
+                    if issues:
+                        key = f"cookie_sec:{page.url}:{cookie_chunk[:40]}"
+                        if key not in seen:
+                            seen.add(key)
+                            findings.append(
+                                make_finding(
+                                    "cookie_sec",
+                                    _fake_point(page.url, "set-cookie"),
+                                    "(passivo)",
+                                    "medium",
+                                    f"Cookie inseguro ({', '.join(issues)})",
+                                )
+                            )
+
+        # JWT fraco / alg none em resposta
+        if "info" in config.categories and JWT_WEAK_RE.search(page.body):
+            key = f"jwt_weak:{page.url}"
+            if key not in seen:
+                seen.add(key)
+                findings.append(
+                    make_finding(
+                        "info",
+                        _fake_point(page.url, "jwt"),
+                        "(passivo)",
+                        "high",
+                        "JWT com algoritmo 'none' ou configuração fraca detectada",
+                    )
+                )
 
         # Information disclosure
         if "info" in config.categories:

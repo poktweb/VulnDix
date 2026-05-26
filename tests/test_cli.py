@@ -51,6 +51,10 @@ def _args(**kwargs: object) -> argparse.Namespace:
     return argparse.Namespace(**defaults)
 
 
+def test_all_scan_has_21_categories():
+    assert len(ALL_SCAN_CATEGORIES) == 21
+
+
 def test_all_mode_enables_every_category():
     config = cli.build_config(_args(all=True))
     assert config.categories == ALL_SCAN_CATEGORIES

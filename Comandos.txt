@@ -50,9 +50,9 @@ MODO ALL (scan completo — qualquer alvo)
 --------------------------------------
   python vulndix.py -u https://alvo.com/ --all -o report.json --i-understand
 
-  Ativa as 16 categorias sem listar --categories:
-    fuzz: sqli, xss, nosql, ssrf, xxe, lfi, traversal, cmdi, ssti, redirect, host_header
-    passivo: idor, cors, csrf, clickjacking, info
+  Ativa as 21 categorias sem listar --categories:
+    fuzz: sqli, xss, nosql, ssrf, xxe, lfi, traversal, cmdi, ssti, redirect, host_header, crlf, ldap
+    passivo: idor, cors, csrf, clickjacking, info, sec_headers, cookie_sec, api_exposed
   Também liga --fuzz-headers e --ignore-robots.
   Modo turbo (--all): 30 threads, 8 payloads/cat., corpo limitado a 96KB,
   categorias por parâmetro (máx. 6), parada ao achar falha na categoria,
@@ -216,16 +216,21 @@ CATEGORIAS DE TESTE
     cmdi        — Command Injection
     redirect    — Open Redirect
     host_header — Host header attacks (labs PortSwigger)
+    crlf        — CRLF / HTTP header injection
+    ldap        — LDAP Injection (login, filtros de diretório)
 
   Passivas (sem payload; analisa páginas do crawl):
     idor          — IDOR / access control (productId, userId ±1)
     cors          — CORS mal configurado
     csrf          — Formulário POST sem token anti-CSRF
     clickjacking  — Sem X-Frame-Options / CSP frame-ancestors
-    info          — Stack trace, erros SQL expostos na página
+    info          — Stack trace, erros SQL, chaves expostas, JWT fraco
+    sec_headers   — HSTS, CSP, X-Content-Type-Options, etc. ausentes
+    cookie_sec    — Cookies sem Secure / HttpOnly / SameSite
+    api_exposed   — Swagger, GraphQL, .env, .git, actuator (sondagem leve)
 
   Padrão (sem flags): xss, sqli, lfi, ssti, cmdi, redirect, traversal
-  Com --all ou --portswigger: todas as 16 categorias acima
+  Com --all ou --portswigger: todas as 21 categorias acima
 
   Modo completo (qualquer alvo autorizado):
     python vulndix.py -u https://alvo.com/ --all -o report.json --i-understand
@@ -276,7 +281,7 @@ FLAGS PRINCIPAIS (referência rápida)
 ------------------------------------
   -u URL                  Alvo (obrigatório no scan)
   --i-understand          Confirma autorização legal (obrigatório)
-  --all                   Todas as falhas (16 categorias); não precisa --categories
+  --all                   Todas as falhas (21 categorias); não precisa --categories
   --portswigger           Igual --all + rotas típicas dos labs Academy
   -o report.json          Salva relatório (só se houver achados)
   --categories a,b,c      Filtra tipos (não use junto com --all)

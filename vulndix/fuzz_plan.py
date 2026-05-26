@@ -3,9 +3,22 @@ from __future__ import annotations
 
 from vulndix.models import InjectionPoint, ScanConfig, VulnType
 
-PASSIVE_TYPES = frozenset({"info", "clickjacking", "csrf", "cors", "idor"})
+PASSIVE_TYPES = frozenset(
+    {
+        "info",
+        "clickjacking",
+        "csrf",
+        "cors",
+        "idor",
+        "sec_headers",
+        "cookie_sec",
+        "api_exposed",
+    }
+)
 
-FAST_HEADER_NAMES = frozenset({"Host", "User-Agent"})
+FAST_HEADER_NAMES = frozenset(
+    {"Host", "User-Agent", "X-Original-URL", "X-Rewrite-URL", "Referer"}
+)
 
 # Ordem: payloads de alto sinal primeiro; cap em fast_fuzz corta o fim da lista
 CATEGORY_PRIORITY: tuple[VulnType, ...] = (
@@ -17,6 +30,8 @@ CATEGORY_PRIORITY: tuple[VulnType, ...] = (
     "ssti",
     "cmdi",
     "nosql",
+    "crlf",
+    "ldap",
     "traversal",
     "xxe",
     "host_header",
@@ -157,8 +172,15 @@ def categories_for_point(
     if loc == "header":
         if name == "host":
             allowed = {"host_header", "xss", "sqli"}
-        elif name in ("user-agent", "referer", "x-forwarded-for", "x-forwarded-host"):
-            allowed = {"xss", "sqli", "ssrf"}
+        elif name in (
+            "user-agent",
+            "referer",
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-original-url",
+            "x-rewrite-url",
+        ):
+            allowed = {"xss", "sqli", "ssrf", "crlf", "host_header"}
         else:
             allowed = {"xss", "sqli"}
         return _order_categories(active & allowed, category_cap)
@@ -183,12 +205,16 @@ def categories_for_point(
         if name not in ("redirect", "return", "next", "url"):
             allowed.discard("redirect")
 
+    if name in ("user", "username", "email", "login", "uid", "cn", "dn", "filter"):
+        allowed |= {"ldap"}
+
     if _is_id_like_param(name):
         allowed |= {"sqli", "nosql"}
     elif _is_generic_param(name):
-        allowed &= GENERIC_PARAM_CATS | {"redirect", "ssrf", "lfi", "traversal"}
+        allowed &= GENERIC_PARAM_CATS | {"redirect", "ssrf", "lfi", "traversal", "crlf"}
         allowed.discard("cmdi")
         allowed.discard("nosql")
+        allowed.discard("ldap")
 
     return _order_categories(allowed, category_cap)
 

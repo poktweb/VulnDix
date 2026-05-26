@@ -32,7 +32,7 @@ def detect(
             "medium",
             f"Location externo: {loc[:200]}",
         )
-    if loc.startswith(("http://", "https://")) and scope_host:
+    if loc.startswith(("http://", "https://", "//")) and scope_host:
         if host and host != scope_host.lower() and not host.endswith("." + scope_host.lower()):
             if "evil.example" in loc or EVIL_HOST in loc:
                 return finding(
@@ -42,4 +42,20 @@ def detect(
                     "medium",
                     f"Open redirect para: {loc[:200]}",
                 )
+        if loc.startswith("//") and "evil.example" in loc:
+            return finding(
+                "redirect",
+                point,
+                payload,
+                "medium",
+                f"Open redirect protocol-relative: {loc[:200]}",
+            )
+    if probe.status in (301, 302, 303, 307, 308) and payload and payload in loc:
+        return finding(
+            "redirect",
+            point,
+            payload,
+            "high",
+            f"Open redirect: payload refletido em Location ({loc[:120]})",
+        )
     return None

@@ -20,6 +20,8 @@ _DETECTORS: dict[VulnType, str] = {
     "ssrf": "vulndix.detectors.ssrf",
     "xxe": "vulndix.detectors.xxe",
     "host_header": "vulndix.detectors.host_header",
+    "crlf": "vulndix.detectors.crlf",
+    "ldap": "vulndix.detectors.ldap",
 }
 
 

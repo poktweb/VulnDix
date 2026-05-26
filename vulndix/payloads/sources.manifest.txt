@@ -32,3 +32,5 @@ xss	SecLists/URI-XSS	https://raw.githubusercontent.com/danielmiessler/SecLists/m
 xss	SecLists/XSS-RSNAKE	https://raw.githubusercontent.com/danielmiessler/SecLists/master/Fuzzing/XSS/robot-friendly/XSS-RSNAKE.txt	73
 xss	fuzzdb/xss-rsnake	https://raw.githubusercontent.com/fuzzdb-project/fuzzdb/master/attack/xss/xss-rsnake.txt	76
 xxe	PAT/XXE-README	https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/XXE%20Injection/README.md	265
+crlf	PAT/CRLF-README	https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/CRLF%20Injection/README.md	36
+ldap	PAT/LDAP-README	https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/LDAP%20Injection/README.md	70

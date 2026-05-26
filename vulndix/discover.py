@@ -36,6 +36,8 @@ FUZZ_HEADER_NAMES = (
     "Referer",
     "X-Forwarded-For",
     "X-Forwarded-Host",
+    "X-Original-URL",
+    "X-Rewrite-URL",
     "Host",
 )
 

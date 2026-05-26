@@ -22,6 +22,11 @@ VulnType = Literal[
     "info",
     "clickjacking",
     "csrf",
+    "crlf",
+    "ldap",
+    "sec_headers",
+    "cookie_sec",
+    "api_exposed",
 ]
 
 

@@ -1,0 +1,152 @@
+{
+  "tool": "VulnDix",
+  "target": "https://portal.exoscale.com/",
+  "scanned_at": "2026-05-20T21:36:10.439572+00:00",
+  "categories": [
+    "api_exposed",
+    "clickjacking",
+    "cmdi",
+    "cookie_sec",
+    "cors",
+    "crlf",
+    "csrf",
+    "host_header",
+    "idor",
+    "info",
+    "ldap",
+    "lfi",
+    "nosql",
+    "redirect",
+    "sec_headers",
+    "sqli",
+    "ssrf",
+    "ssti",
+    "traversal",
+    "xss",
+    "xxe"
+  ],
+  "strict_mode": true,
+  "summary": {
+    "total": 10,
+    "by_type": {
+      "clickjacking": 4,
+      "sec_headers": 4,
+      "xss": 1,
+      "ssrf": 1
+    },
+    "by_confidence": {
+      "medium": 4,
+      "low": 4,
+      "high": 2
+    }
+  },
+  "scan": {
+    "pages_crawled": 4,
+    "injection_points": 103,
+    "probes": 3082,
+    "portswigger_mode": false,
+    "fast_fuzz": true
+  },
+  "findings": [
+    {
+      "type": "clickjacking",
+      "endpoint": "https://portal.exoscale.com/?headers=%28passivo%29",
+      "param": "headers",
+      "location": "query",
+      "payload": "(passivo)",
+      "confidence": "medium",
+      "evidence": "Sem X-Frame-Options nem CSP frame-ancestors",
+      "curl": ""
+    },
+    {
+      "type": "sec_headers",
+      "endpoint": "https://portal.exoscale.com/?headers=%28passivo%29",
+      "param": "headers",
+      "location": "query",
+      "payload": "(passivo)",
+      "confidence": "low",
+      "evidence": "Cabeçalhos de segurança ausentes: HSTS, CSP, X-Content-Type-Options, Referrer-Policy, Permissions-Policy",
+      "curl": ""
+    },
+    {
+      "type": "clickjacking",
+      "endpoint": "https://portal.exoscale.com/forgot?headers=%28passivo%29",
+      "param": "headers",
+      "location": "query",
+      "payload": "(passivo)",
+      "confidence": "medium",
+      "evidence": "Sem X-Frame-Options nem CSP frame-ancestors",
+      "curl": ""
+    },
+    {
+      "type": "sec_headers",
+      "endpoint": "https://portal.exoscale.com/forgot?headers=%28passivo%29",
+      "param": "headers",
+      "location": "query",
+      "payload": "(passivo)",
+      "confidence": "low",
+      "evidence": "Cabeçalhos de segurança ausentes: HSTS, CSP, X-Content-Type-Options, Referrer-Policy, Permissions-Policy",
+      "curl": ""
+    },
+    {
+      "type": "clickjacking",
+      "endpoint": "https://portal.exoscale.com/register?headers=%28passivo%29",
+      "param": "headers",
+      "location": "query",
+      "payload": "(passivo)",
+      "confidence": "medium",
+      "evidence": "Sem X-Frame-Options nem CSP frame-ancestors",
+      "curl": ""
+    },
+    {
+      "type": "sec_headers",
+      "endpoint": "https://portal.exoscale.com/register?headers=%28passivo%29",
+      "param": "headers",
+      "location": "query",
+      "payload": "(passivo)",
+      "confidence": "low",
+      "evidence": "Cabeçalhos de segurança ausentes: HSTS, CSP, X-Content-Type-Options, Referrer-Policy, Permissions-Policy",
+      "curl": ""
+    },
+    {
+      "type": "clickjacking",
+      "endpoint": "https://portal.exoscale.com/login?headers=%28passivo%29",
+      "param": "headers",
+      "location": "query",
+      "payload": "(passivo)",
+      "confidence": "medium",
+      "evidence": "Sem X-Frame-Options nem CSP frame-ancestors",
+      "curl": ""
+    },
+    {
+      "type": "sec_headers",
+      "endpoint": "https://portal.exoscale.com/login?headers=%28passivo%29",
+      "param": "headers",
+      "location": "query",
+      "payload": "(passivo)",
+      "confidence": "low",
+      "evidence": "Cabeçalhos de segurança ausentes: HSTS, CSP, X-Content-Type-Options, Referrer-Policy, Permissions-Policy",
+      "curl": ""
+    },
+    {
+      "type": "xss",
+      "endpoint": "https://portal.exoscale.com/login?next=javascript%3Aalert%281%29",
+      "param": "next",
+      "location": "query",
+      "payload": "javascript:alert(1)",
+      "confidence": "high",
+      "evidence": "payload perigoso refletido em HTML",
+      "curl": ""
+    },
+    {
+      "type": "ssrf",
+      "endpoint": "https://portal.exoscale.com/login?next=http%3A%2F%2Flocalhost%2F",
+      "param": "next",
+      "location": "query",
+      "payload": "http://localhost/",
+      "confidence": "high",
+      "evidence": "Indício SSRF: localhost",
+      "curl": ""
+    }
+  ]
+}

@@ -15,14 +15,25 @@ DEFAULT_PAYLOAD_DIR = Path(__file__).resolve().parent / "payloads"
 MANIFEST_NAME = "sources.manifest.txt"
 STAMP_FILE = ".payloads_synced"
 VERSION_FILE = ".payloads_version"
-PAYLOADS_TOOL_VERSION = 4
+PAYLOADS_TOOL_VERSION = 5
 DEFAULT_WORDLIST_DIR = Path(__file__).resolve().parent / "payloads" / "wordlists"
 # Mínimo de payloads por categoria para considerar "já baixado"
 MIN_PAYLOADS_READY = 15
 MIN_PAYLOADS_READY_SMALL = 5  # redirect, ssti (menos fontes online)
 SMALL_CATEGORIES = frozenset({"redirect", "ssti"})
 # Sem arquivo de fuzz (só detectores passivos / headers fixos)
-PASSIVE_SCAN_CATEGORIES = frozenset({"idor", "cors", "csrf", "clickjacking", "info"})
+PASSIVE_SCAN_CATEGORIES = frozenset(
+    {
+        "idor",
+        "cors",
+        "csrf",
+        "clickjacking",
+        "info",
+        "sec_headers",
+        "cookie_sec",
+        "api_exposed",
+    }
+)
 # Apenas seeds locais (sem listas remotas grandes)
 SEED_ONLY_CATEGORIES = frozenset({"host_header"})
 
@@ -222,6 +233,20 @@ PAYLOAD_SOURCES: dict[VulnType, tuple[PayloadSource, ...]] = {
         ),
     ),
     "host_header": (),
+    "crlf": (
+        PayloadSource(
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/CRLF%20Injection/README.md",
+            "PAT/CRLF-README",
+            markdown=True,
+        ),
+    ),
+    "ldap": (
+        PayloadSource(
+            "https://raw.githubusercontent.com/swisskyrepo/PayloadsAllTheThings/master/LDAP%20Injection/README.md",
+            "PAT/LDAP-README",
+            markdown=True,
+        ),
+    ),
 }
 
 LOCAL_SEED: dict[VulnType, tuple[str, ...]] = {
@@ -233,6 +258,8 @@ LOCAL_SEED: dict[VulnType, tuple[str, ...]] = {
         '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>',
     ),
     "host_header": ("127.0.0.1", "localhost"),
+    "crlf": ("%0d%0aSet-Cookie:%20injected=1", "%0d%0aX-Injected:%201"),
+    "ldap": ("*", "admin)(&)", "x' or '1'='1"),
 }
 
 

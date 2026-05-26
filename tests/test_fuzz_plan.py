@@ -59,5 +59,5 @@ def test_fast_header_filter():
         InjectionPoint("https://x/", "GET", "header", "X-Forwarded-For"),
     ]
     out = filter_points_for_fast_fuzz(pts)
-    assert len(out) == 1
-    assert out[0].name == "Host"
+    assert len(out) == 2
+    assert {p.name for p in out} == {"Host", "Referer"}

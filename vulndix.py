@@ -204,7 +204,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--all",
         action="store_true",
-        help="Testa todas as falhas (16 categorias) sem listar --categories; fuzz de headers ativo.",
+        help="Testa todas as falhas (21 categorias) sem listar --categories; fuzz de headers ativo.",
     )
     p.add_argument(
         "--portswigger",

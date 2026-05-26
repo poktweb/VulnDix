@@ -16,6 +16,7 @@ from vulndix.fuzz_plan import (
     filter_points_for_fast_fuzz,
     prioritize_points,
 )
+from vulndix.api_probe import scan_exposed_apis
 from vulndix.idor import scan_idor
 from vulndix.passive import run_passive_checks
 from vulndix.payload_updater import DEFAULT_PAYLOAD_DIR, parse_payload_lines
@@ -63,8 +64,17 @@ def load_payloads(config: ScanConfig) -> dict[VulnType, list[str]]:
     base = Path(config.payload_dir) if config.payload_dir else DEFAULT_PAYLOAD_DIR
     out: dict[VulnType, list[str]] = {}
     for cat in config.categories:
-        if cat in ("info", "clickjacking", "csrf", "cors", "idor"):
-            if cat == "idor":
+        if cat in (
+            "info",
+            "clickjacking",
+            "csrf",
+            "cors",
+            "idor",
+            "sec_headers",
+            "cookie_sec",
+            "api_exposed",
+        ):
+            if cat in ("idor", "api_exposed"):
                 continue
             seeds = PRIORITY_PAYLOADS.get(cat, ())
             if seeds:
@@ -187,6 +197,9 @@ def fuzz_points(
     idor_findings = scan_idor(session, points, config)
     findings.extend(idor_findings)
 
+    api_findings = scan_exposed_apis(config, browser_cookies)
+    findings.extend(api_findings)
+
     eprint(f"[*] Marcador XSS (interno): {config.xss_marker}")
     eprint(f"[*] Pontos de injeção: {len(points)}")
     for cat, pls in payloads_map.items():
@@ -281,7 +294,16 @@ def fuzz_points(
     naive = 0
     for point in points:
         for vuln_type in config.categories:
-            if vuln_type in ("info", "clickjacking", "csrf", "cors", "idor"):
+            if vuln_type in (
+                "info",
+                "clickjacking",
+                "csrf",
+                "cors",
+                "idor",
+                "sec_headers",
+                "cookie_sec",
+                "api_exposed",
+            ):
                 continue
             naive += len(payloads_map.get(vuln_type, ()))
 
