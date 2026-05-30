@@ -16,6 +16,8 @@ from pathlib import Path
 
 from vulndix.crawler import crawl
 from vulndix.fuzzer import fuzz_points
+from vulndix.pipeline import run_scan_pipeline
+from vulndix.stealth import apply_stealth_defaults_to_args, pick_user_agent
 from vulndix.wordlist_fuzz import (
     FUZZ_TOKEN,
     load_wordlist,
@@ -86,17 +88,25 @@ def parse_header(raw: str) -> tuple[str, str]:
 
 
 def resolve_categories(args: argparse.Namespace) -> frozenset[VulnType]:
-    if args.categories and (args.all or args.portswigger):
+    preset_flags = (args.all, args.portswigger, args.stealth)
+    presets = sum(bool(x) for x in preset_flags)
+    if presets > 1:
         raise ValueError(
-            "Use apenas um preset: --all ou --portswigger, ou --categories (não combine)."
+            "Use apenas um preset: --all, --portswigger ou --stealth (não combine)."
         )
-    if args.all or args.portswigger:
+    if args.categories and presets:
+        raise ValueError(
+            "Use apenas um preset: --all, --portswigger, --stealth, ou --categories (não combine)."
+        )
+    if args.all or args.portswigger or args.stealth:
         return ALL_SCAN_CATEGORIES
     return parse_categories(args.categories)
 
 
 def apply_scan_presets(args: argparse.Namespace) -> None:
-    """Ajusta limites padrão quando --all ou --portswigger estão ativos."""
+    """Ajusta limites padrão quando --all, --portswigger ou --stealth estão ativos."""
+    if args.stealth:
+        apply_stealth_defaults_to_args(args)
     if args.all or args.portswigger:
         if args.max_payloads == 30:
             args.max_payloads = 8
@@ -116,24 +126,25 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
 
     categories = resolve_categories(args)
     full_scan = args.all or args.portswigger
+    stealth = args.stealth
 
     return ScanConfig(
         url=args.url or "",
         max_depth=args.max_depth,
         max_pages=args.max_pages,
-        ignore_robots=args.ignore_robots or full_scan,
+        ignore_robots=args.ignore_robots or (full_scan and not stealth),
         verify_tls=not args.insecure,
-        fuzz_headers=args.fuzz_headers or full_scan,
+        fuzz_headers=args.fuzz_headers or (full_scan and not stealth),
         portswigger_mode=args.portswigger,
-        fast_fuzz=full_scan,
-        probe_timeout_s=8.0 if full_scan else 12.0,
+        fast_fuzz=full_scan or stealth,
+        probe_timeout_s=8.0 if (full_scan or stealth) else 12.0,
         probe_max_body_bytes=98304,
-        fuzz_category_cap=6 if full_scan else 0,
+        fuzz_category_cap=(4 if stealth else 6) if (full_scan or stealth) else 0,
         categories=categories,
         max_payloads=args.max_payloads,
         delay_ms=args.delay_ms,
         threads=args.threads,
-        verify_curl=not args.no_verify_curl and not full_scan,
+        verify_curl=not args.no_verify_curl and not (full_scan and not stealth),
         payload_dir=args.payload_dir,
         user_agent=args.user_agent,
         login_url=args.login_url,
@@ -152,6 +163,13 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
         wordlist_max_lines=args.wordlist_max or 0,
         discover_params=not args.no_discover_params,
         spa_wait_ms=args.spa_wait_ms,
+        stealth_mode=stealth,
+        deep_scan=args.deep,
+        use_toolchain=not args.no_toolchain,
+        fuzz_tier_mode=stealth or args.fuzz_tiers,
+        proxy=args.proxy,
+        jitter_ms=args.jitter_ms if stealth else 0,
+        synthetic_probes=not args.no_synthetic_probes,
     )
 
 
@@ -159,7 +177,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="VulnDix — DAST com suporte PortSwigger Web Security Academy.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        epilog="Scan completo: --all | Labs Academy: --portswigger | Doc: Comandos.txt",
+        epilog="Produção: --stealth | Labs: --all/--portswigger | Doc: Comandos.txt",
     )
     p.add_argument(
         "-u",
@@ -210,6 +228,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--portswigger",
         action="store_true",
         help="Preset Academy: igual --all + rotas típicas dos labs (/filter, /product, …).",
+    )
+    p.add_argument(
+        "--stealth",
+        action="store_true",
+        help="Preset discreto (bug bounty/pentest): baixo ruído, tiers, toolchain passiva, UA rotativo.",
+    )
+    p.add_argument(
+        "--deep",
+        action="store_true",
+        help="Fase ruidosa: ffuf, nuclei, nikto, dirsearch, dirb (código-fonte; após scan principal).",
+    )
+    p.add_argument(
+        "--fuzz-tiers",
+        action="store_true",
+        help="Fuzz em 3 tiers (canario -> prioridade -> resto se anomalia). Ativo em --stealth.",
+    )
+    p.add_argument(
+        "--no-toolchain",
+        action="store_true",
+        help="Não invoca httpx/subfinder/dalfox vendored.",
+    )
+    p.add_argument(
+        "--install-tools",
+        action="store_true",
+        help="Baixa binários do manifest para third_party/ e encerra.",
+    )
+    p.add_argument("--proxy", default=None, help="Proxy HTTP/S para probes e toolchain.")
+    p.add_argument(
+        "--jitter-ms",
+        type=int,
+        default=0,
+        metavar="MS",
+        help="Jitter extra entre probes (stealth usa delay interno).",
+    )
+    p.add_argument(
+        "--no-synthetic-probes",
+        action="store_true",
+        help="Não criar ?id=, ?page= sintéticos quando o crawl não achar parâmetros.",
     )
     p.add_argument("--update-payloads", action="store_true", help="Só baixa payloads e encerra.")
     p.add_argument("--refresh-payloads", action="store_true", help="Força download de payloads.")
@@ -263,6 +319,11 @@ def main() -> int:
     print(LEGAL_BANNER, file=sys.stderr)
 
     apply_scan_presets(args)
+
+    if args.install_tools:
+        from vulndix.toolchain_install import install_all_tools
+
+        return install_all_tools()
 
     if args.update_payloads:
         if args.all or args.portswigger:
@@ -330,6 +391,15 @@ def main() -> int:
         )
     if args.portswigger:
         eprint("[*] Modo PortSwigger: modo All + rotas típicas dos labs Academy")
+    if args.stealth:
+        eprint(
+            "[*] Modo Stealth: baixo ruído, fuzz em tiers, "
+            + ("toolchain ativa" if not args.no_toolchain else "sem toolchain")
+        )
+    if args.deep:
+        eprint("[*] Modo Deep: ffuf, nuclei, nikto, dirsearch, dirb após o scan principal")
+
+    out_path = Path(args.output) if args.output else None
 
     if not args.crawl_only and not args.skip_payload_sync:
         payload_dest = Path(args.payload_dir) if args.payload_dir else None
@@ -341,6 +411,10 @@ def main() -> int:
         )
     elif args.skip_payload_sync:
         eprint("[*] Download de payloads desativado (--skip-payload-sync).")
+
+    if config.stealth_mode or config.deep_scan:
+        run_scan_pipeline(config, jsonl=args.jsonl, output_path=out_path)
+        return 0
 
     try:
         points, cookies, pages_crawled, page_samples = crawl(config)
@@ -365,9 +439,11 @@ def main() -> int:
         eprint(f"[+] {len(points)} pontos listados (crawl-only)")
         return 0
 
-    out_path = Path(args.output) if args.output else None
     if not out_path and not args.jsonl:
         eprint("[*] Dica: use -o report.json para salvar o relatório completo.")
+
+    if not config.user_agent or "VulnDix" in config.user_agent:
+        config.user_agent = pick_user_agent()
 
     fuzz_points(
         points,

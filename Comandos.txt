@@ -23,6 +23,16 @@ INSTALAÇÃO
   Forçar novo download: python vulndix.py --refresh-payloads -u https://alvo/ --i-understand
   Sem internet (só local):  --skip-payload-sync
 
+  Toolchain (somente código-fonte — sem .exe de releases):
+    python vulndix.py --install-tools
+    Clona em third_party/sources/: httpx, subfinder, dalfox, ffuf, nuclei,
+    dirsearch, nikto, dirb + templates nuclei em third_party/data/
+    Remove binários antigos em third_party/windows-amd64/ se existirem.
+    Go (httpx, ffuf, …): instale https://go.dev/dl/ — VulnDix usa go run no clone.
+    dirsearch: Python | nikto: Perl | dirb: make no Linux/WSL (opcional)
+    nmap: removido do VulnDix.
+  Licenças: third_party/LICENSES.md
+
 
 SAÍDA (como ler os resultados)
 ------------------------------
@@ -44,6 +54,36 @@ O que NÃO é reportado (anti falso positivo):
   • Reflexão de token de teste sem contexto HTML perigoso
   • Respostas JSON / RSC (text/x-component) sem XSS real
   • Links para .pdf, .png, .js, etc. (não entram no crawl)
+
+
+MODO STEALTH (recomendado — bug bounty / pentest autorizado)
+------------------------------------------------------------
+  python vulndix.py -u https://alvo.com/ --stealth -o report.json --i-understand
+
+  Perfil discreto (menos rastro em WAF/logs):
+    • 21 categorias, mas ~3 threads, delay ~350ms + jitter, sem fuzz de headers
+    • Respeita robots.txt; crawl mais curto (50 páginas); probes sintéticos reduzidos
+    • Fuzz em 3 tiers: canário → payloads prioritários → resto só se houver anomalia
+    • Param mining (JS/URLs) + probe canário antes de listas XSS grandes
+    • User-Agent de browser real (sem string VulnDix)
+    • Toolchain passiva (se instalada): subfinder (fontes passivas) → httpx → dalfox
+
+  Instalar código-fonte do GitHub:
+    python vulndix.py --install-tools
+    # Linux:  bash scripts/install-toolchain.sh
+    # Windows: powershell -File scripts/install-toolchain.ps1
+    Código: third_party/sources/<ferramenta>/
+    Sem downloads de .exe — compilação via go run / python / perl local.
+
+  Modo barulhento (opcional, após o scan):
+    python vulndix.py -u https://alvo.com/ --stealth --deep -o report.json --i-understand
+    Roda ffuf, nuclei, nikto, dirsearch, dirb — use só com autorização explícita.
+
+  Proxy:
+    python vulndix.py -u https://alvo.com/ --stealth --proxy http://127.0.0.1:8080 --i-understand
+
+  Sem ferramentas externas (só Python):
+    python vulndix.py -u https://alvo.com/ --stealth --no-toolchain --i-understand
 
 
 MODO ALL (scan completo — qualquer alvo)

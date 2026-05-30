@@ -1,0 +1,92 @@
+{
+  "version": 3,
+  "policy": "source_only",
+  "note": "Sem downloads de .exe/.zip de releases. Go: requer 'go' no PATH (go run no clone). Python/Perl: scripts do repo.",
+  "sources_dir": "sources",
+  "tools": {
+    "httpx": {
+      "repo": "projectdiscovery/httpx",
+      "git_url": "https://github.com/projectdiscovery/httpx.git",
+      "git_tag": "v1.6.10",
+      "install": ["git"],
+      "license": "MIT",
+      "runtime": "go",
+      "go_run": "./cmd/httpx"
+    },
+    "subfinder": {
+      "repo": "projectdiscovery/subfinder",
+      "git_url": "https://github.com/projectdiscovery/subfinder.git",
+      "git_tag": "v2.6.6",
+      "install": ["git"],
+      "license": "MIT",
+      "runtime": "go",
+      "go_run": "./v2/cmd/subfinder"
+    },
+    "dalfox": {
+      "repo": "hahwul/dalfox",
+      "git_url": "https://github.com/hahwul/dalfox.git",
+      "git_tag": "v3.0.0",
+      "install": ["git"],
+      "license": "MIT",
+      "runtime": "go",
+      "go_run": "."
+    },
+    "ffuf": {
+      "repo": "ffuf/ffuf",
+      "git_url": "https://github.com/ffuf/ffuf.git",
+      "git_tag": "v2.1.0",
+      "install": ["git"],
+      "license": "MIT",
+      "runtime": "go",
+      "go_run": "."
+    },
+    "nuclei": {
+      "repo": "projectdiscovery/nuclei",
+      "git_url": "https://github.com/projectdiscovery/nuclei.git",
+      "git_tag": "v3.2.4",
+      "install": ["git"],
+      "license": "MIT",
+      "runtime": "go",
+      "go_run": "./cmd/nuclei",
+      "extra_repos": [
+        {
+          "name": "nuclei-templates",
+          "git_url": "https://github.com/projectdiscovery/nuclei-templates.git",
+          "git_branch": "main",
+          "dest": "data/nuclei-templates"
+        }
+      ]
+    },
+    "dirsearch": {
+      "repo": "maurosoria/dirsearch",
+      "git_url": "https://github.com/maurosoria/dirsearch.git",
+      "git_branch": "master",
+      "install": ["git", "pip"],
+      "license": "GPL-3.0",
+      "runtime": "python",
+      "entry": "dirsearch.py",
+      "pip_requirements": "requirements.txt"
+    },
+    "nikto": {
+      "repo": "sullo/nikto",
+      "git_url": "https://github.com/sullo/nikto.git",
+      "git_branch": "main",
+      "install": ["git"],
+      "license": "GPL-2.0",
+      "runtime": "perl",
+      "entry": "program/nikto.pl",
+      "note": "Requer Perl no PATH (Strawberry Perl no Windows)."
+    },
+    "dirb": {
+      "repo": "kalilinux/packages/dirb",
+      "git_url": "https://gitlab.com/kalilinux/packages/dirb.git",
+      "git_branch": "kali/master",
+      "install": ["git", "build_make"],
+      "license": "GPL-2.0",
+      "runtime": "native",
+      "binary": "dirb",
+      "build_binary": "dirb",
+      "note": "Código-fonte apenas. Compilação: make no Linux/WSL (sem baixar .exe)."
+    }
+  }
+}

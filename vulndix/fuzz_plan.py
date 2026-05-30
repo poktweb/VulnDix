@@ -1,7 +1,8 @@
 """Planejamento de fuzz: menos probes irrelevantes por ponto/categoria."""
 from __future__ import annotations
 
-from vulndix.models import InjectionPoint, ScanConfig, VulnType
+from vulndix.models import BaselineResponse, InjectionPoint, ProbeResponse, ScanConfig, VulnType
+from vulndix.portswigger import PRIORITY_PAYLOADS
 
 PASSIVE_TYPES = frozenset(
     {
@@ -234,6 +235,108 @@ def estimate_fuzz_tasks(
             cats = tuple(c for c in CATEGORY_PRIORITY if c in config.categories - PASSIVE_TYPES)
         for vuln_type in cats:
             total += len(payloads_map.get(vuln_type, ()))
+    return total
+
+
+# Tier 0: um canário por categoria (alto sinal, mínimo ruído)
+CANARY_PAYLOADS: dict[VulnType, str] = {
+    "sqli": "'",
+    "xss": "<vdx>",
+    "lfi": "../../../../etc/passwd",
+    "ssti": "{{7*7}}",
+    "cmdi": ";id",
+    "redirect": "https://evil.example/",
+    "traversal": "../",
+    "nosql": '{"$gt":""}',
+    "ssrf": "http://127.0.0.1/",
+    "xxe": '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe "t">]><foo>&xxe;</foo>',
+    "host_header": "evil.example",
+    "crlf": "%0d%0aSet-Cookie: x=1",
+    "ldap": "*)(uid=*",
+}
+
+
+def probe_has_anomaly(
+    baseline: BaselineResponse,
+    probe: ProbeResponse,
+    *,
+    len_delta_min: int = 12,
+    time_delta_ms: float = 400.0,
+) -> bool:
+    """Indica se vale abrir Tier 2 (resto da wordlist)."""
+    if probe.status == 0:
+        return False
+    if probe.status != baseline.status:
+        return True
+    if abs(probe.body_len - baseline.body_len) >= len_delta_min:
+        return True
+    if abs(probe.elapsed_ms - baseline.elapsed_ms) >= time_delta_ms:
+        return True
+    from vulndix.transport import body_hash
+
+    if body_hash(probe.body) != baseline.body_hash:
+        return True
+    return False
+
+
+def payloads_for_tier(
+    cat: VulnType,
+    all_payloads: list[str],
+    tier: int,
+    *,
+    fast: bool = False,
+) -> list[str]:
+    """Tier 0=canário, 1=prioridade, 2=resto (só se caller habilitar após anomalia)."""
+    priority = list(PRIORITY_PAYLOADS.get(cat, ()))
+    canary = CANARY_PAYLOADS.get(cat)
+    tier0: list[str] = []
+    if canary:
+        tier0.append(canary)
+    elif priority:
+        tier0.append(priority[0])
+    elif all_payloads:
+        tier0.append(all_payloads[0])
+
+    if tier == 0:
+        return tier0[:1]
+
+    seen: set[str] = set()
+    tier1: list[str] = []
+    for p in priority:
+        if p not in seen:
+            tier1.append(p)
+            seen.add(p)
+    for p in all_payloads:
+        if p not in seen:
+            tier1.append(p)
+            seen.add(p)
+
+    if tier == 1:
+        if fast:
+            return tier1[: max(5, len(priority) + 2)]
+        return tier1
+
+    # tier 2: tudo que não entrou em 0/1
+    tier01 = set(tier0) | set(tier1[: max(5, len(priority) + 2)] if fast else tier1)
+    return [p for p in all_payloads if p not in tier01]
+
+
+def estimate_fuzz_tasks_tiered(
+    points: list[InjectionPoint],
+    config: ScanConfig,
+    payloads_map: dict[VulnType, list[str]],
+) -> int:
+    """Estimativa conservadora (assume ~tier0+tier1 por par)."""
+    cap = config.fuzz_category_cap if config.fast_fuzz else 0
+    total = 0
+    for point in points:
+        cats = categories_for_point(point, config.categories, category_cap=cap)
+        for vuln_type in cats:
+            pls = payloads_map.get(vuln_type, ())
+            if config.fuzz_tier_mode:
+                total += min(2, len(pls)) + (1 if pls else 0)
+            else:
+                total += len(pls)
     return total
 
 

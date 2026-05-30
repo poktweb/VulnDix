@@ -13,9 +13,13 @@ from vulndix.fuzz_plan import (
     categories_for_point,
     dedupe_injection_points,
     estimate_fuzz_tasks,
+    estimate_fuzz_tasks_tiered,
     filter_points_for_fast_fuzz,
+    payloads_for_tier,
+    probe_has_anomaly,
     prioritize_points,
 )
+from vulndix.stealth import StealthController, jitter_delay
 from vulndix.api_probe import scan_exposed_apis
 from vulndix.idor import scan_idor
 from vulndix.passive import run_passive_checks
@@ -146,6 +150,8 @@ def fuzz_points(
     output_path: Path | None = None,
     pages_crawled: int = 0,
     page_samples: list[PageSample] | None = None,
+    external_findings: list[Finding] | None = None,
+    pipeline_mode: bool = False,
 ) -> list[Finding]:
     if not config.xss_marker:
         config.xss_marker = f"VULNDIX_{uuid.uuid4().hex[:12]}"
@@ -179,11 +185,18 @@ def fuzz_points(
         return thread_local.session
 
     payloads_map = load_payloads(config)
-    findings: list[Finding] = []
-    seen: set[tuple[str, str, str, str]] = set()
+    findings: list[Finding] = list(external_findings or [])
+    seen: set[tuple[str, str, str, str]] = {
+        (f.type, f.param, f.endpoint, f.payload) for f in findings
+    }
     skip_pair: set[tuple[tuple[str, str, str, str], str]] = set()
+    tier2_allowed: set[tuple[tuple[str, str, str, str], str]] = set()
     lock = Lock()
     probes_done = 0
+
+    stealth_ctl: StealthController | None = None
+    if config.stealth_mode:
+        stealth_ctl = StealthController(base_delay_ms=config.delay_ms)
 
     passive = run_passive_checks(page_samples or [], config)
     findings.extend(passive)
@@ -210,16 +223,27 @@ def fuzz_points(
 
     timeout = config.probe_timeout_s
     max_body = config.probe_max_body_bytes
-    per_thread_delay = config.delay_ms / 1000.0 / max(1, config.threads)
+    per_thread_delay = (
+        0.0
+        if config.stealth_mode and stealth_ctl
+        else config.delay_ms / 1000.0 / max(1, config.threads)
+    )
     cat_cap = config.fuzz_category_cap if config.fast_fuzz else 0
+    effective_threads = (
+        stealth_ctl.apply_thread_cap(config.threads) if stealth_ctl else config.threads
+    )
 
     def run_probe(
         point: InjectionPoint, vuln_type: VulnType, payload: str
     ) -> Finding | None:
         nonlocal probes_done
 
-        if per_thread_delay > 0:
+        if stealth_ctl:
+            stealth_ctl.wait_before_request()
+        elif per_thread_delay > 0:
             time.sleep(per_thread_delay)
+        elif config.jitter_ms > 0:
+            time.sleep(jitter_delay(config.jitter_ms))
 
         prepared = prepare_payload(payload, config)
         baseline = baseline_cache[point.key()]
@@ -231,8 +255,14 @@ def fuzz_points(
             timeout=timeout,
             max_body_bytes=max_body,
         )
+        if stealth_ctl:
+            stealth_ctl.record_response(probe.status)
         with lock:
             probes_done += 1
+
+        pair = (point.key(), vuln_type)
+        if config.fuzz_tier_mode and probe_has_anomaly(baseline, probe):
+            tier2_allowed.add(pair)
 
         result = detect_all(
             vuln_type,
@@ -265,6 +295,19 @@ def fuzz_points(
         eprint(f"[+] {result.type.upper()} {result.param} — {result.evidence[:90]}")
         return result
 
+    def iter_payloads(vuln_type: VulnType, full_list: list[str]) -> list[tuple[int, str]]:
+        if not config.fuzz_tier_mode:
+            return [(1, p) for p in full_list]
+        ordered: list[tuple[int, str]] = []
+        for tier in (0, 1):
+            ordered.extend(
+                (tier, p)
+                for p in payloads_for_tier(
+                    vuln_type, full_list, tier, fast=config.fast_fuzz
+                )
+            )
+        return ordered
+
     def fuzz_one_point(point: InjectionPoint) -> None:
         if config.fast_fuzz:
             cats = categories_for_point(
@@ -275,21 +318,54 @@ def fuzz_points(
                 c
                 for c in categories_for_point(point, config.categories, category_cap=0)
             )
+        if config.hot_points and point.key() in config.hot_points:
+            cats = tuple(c for c in ("xss", "sqli") if c in cats) + tuple(
+                c for c in cats if c not in ("xss", "sqli")
+            )
         for vuln_type in cats:
             pair = (point.key(), vuln_type)
             with lock:
                 if pair in skip_pair:
                     continue
-            payloads = payloads_map.get(vuln_type, ())
-            for payload in payloads:
+            full_list = payloads_map.get(vuln_type, ())
+            tiered = iter_payloads(vuln_type, full_list)
+            for tier, payload in tiered:
+                if tier == 2:
+                    with lock:
+                        if pair not in tier2_allowed:
+                            continue
                 with lock:
                     if pair in skip_pair:
                         break
                 try:
-                    run_probe(point, vuln_type, payload)
+                    finding = run_probe(point, vuln_type, payload)
+                    if (
+                        config.fuzz_tier_mode
+                        and config.stealth_mode
+                        and tier >= 1
+                        and not finding
+                    ):
+                        with lock:
+                            if pair not in tier2_allowed:
+                                break
                 except Exception as e:
                     eprint(f"[-] Erro no fuzz ({point.name}/{vuln_type}): {e}")
                     break
+            if config.fuzz_tier_mode:
+                with lock:
+                    allow_t2 = pair in tier2_allowed and pair not in skip_pair
+                if allow_t2:
+                    for payload in payloads_for_tier(
+                        vuln_type, full_list, 2, fast=config.fast_fuzz
+                    ):
+                        with lock:
+                            if pair in skip_pair:
+                                break
+                        try:
+                            run_probe(point, vuln_type, payload)
+                        except Exception as e:
+                            eprint(f"[-] Erro no fuzz tier2 ({point.name}): {e}")
+                            break
 
     naive = 0
     for point in points:
@@ -307,24 +383,29 @@ def fuzz_points(
                 continue
             naive += len(payloads_map.get(vuln_type, ()))
 
-    planned = estimate_fuzz_tasks(points, config, payloads_map)
+    if config.fuzz_tier_mode:
+        planned = estimate_fuzz_tasks_tiered(points, config, payloads_map)
+    else:
+        planned = estimate_fuzz_tasks(points, config, payloads_map)
     saved_plan = naive - planned if naive > planned else 0
 
     eprint(
         f"[*] Plano: até {planned} probes"
         + (f" ({saved_plan} a menos que varredura ingênua)" if saved_plan else "")
-        + f" | threads={config.threads} | timeout={timeout}s | body≤{max_body // 1024}KB"
+        + f" | threads={effective_threads} | timeout={timeout}s | body≤{max_body // 1024}KB"
     )
     if config.fast_fuzz:
         eprint(
             "[*] Turbo: categorias por parâmetro, cap "
             f"{cat_cap or 'off'}, parada ao achar falha na categoria"
         )
+    if config.fuzz_tier_mode:
+        eprint("[*] Fuzz em tiers: canário → prioridade → resto (se anomalia)")
 
     t0 = time.perf_counter()
-    max_inflight = max(16, min(len(points), config.threads * 2))
+    max_inflight = max(16, min(len(points), effective_threads * 2))
 
-    with ThreadPoolExecutor(max_workers=max(1, max_inflight)) as ex:
+    with ThreadPoolExecutor(max_workers=max(1, effective_threads)) as ex:
         pending = {ex.submit(fuzz_one_point, pt) for pt in points}
         last_log = 0
         progress_step = max(50, planned // 25 or 50)
@@ -357,33 +438,35 @@ def fuzz_points(
         f"({total_probes / elapsed:.1f}/s)" if elapsed > 0 else ""
     )
 
-    print_summary(
-        findings,
-        config,
-        pages_crawled=pages_crawled,
-        points_tested=len(points),
-        probes_run=total_probes,
-    )
+    if not pipeline_mode:
+        print_summary(
+            findings,
+            config,
+            pages_crawled=pages_crawled,
+            points_tested=len(points),
+            probes_run=total_probes,
+        )
 
-    if findings:
-        if jsonl:
-            emit_jsonl(findings)
-        if output_path:
-            write_report(
-                findings,
-                output_path,
-                config,
-                meta={
-                    "pages_crawled": pages_crawled,
-                    "injection_points": len(points),
-                    "probes": total_probes,
-                    "portswigger_mode": config.portswigger_mode,
-                    "fast_fuzz": config.fast_fuzz,
-                },
-            )
-            eprint(f"[+] Relatório salvo: {output_path}")
-    else:
-        if output_path:
-            eprint(f"[*] Relatório não gerado ({output_path}): nenhum achado na varredura.")
+        if findings:
+            if jsonl:
+                emit_jsonl(findings)
+            if output_path:
+                write_report(
+                    findings,
+                    output_path,
+                    config,
+                    meta={
+                        "pages_crawled": pages_crawled,
+                        "injection_points": len(points),
+                        "probes": total_probes,
+                        "portswigger_mode": config.portswigger_mode,
+                        "fast_fuzz": config.fast_fuzz,
+                        "stealth_mode": config.stealth_mode,
+                    },
+                )
+                eprint(f"[+] Relatório salvo: {output_path}")
+        else:
+            if output_path:
+                eprint(f"[*] Relatório não gerado ({output_path}): nenhum achado na varredura.")
 
     return findings

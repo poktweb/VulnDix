@@ -68,6 +68,8 @@ def build_session(
             if name and value is not None:
                 sess.cookies.set(name, value, domain=domain.lstrip("."))
     sess.verify = config.verify_tls
+    if config.proxy:
+        sess.proxies = {"http": config.proxy, "https": config.proxy}
     return sess
 
 

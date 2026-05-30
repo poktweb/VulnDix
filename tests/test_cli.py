@@ -46,6 +46,13 @@ def _args(**kwargs: object) -> argparse.Namespace:
         "wordlist_max": 0,
         "no_discover_params": False,
         "spa_wait_ms": 2500,
+        "stealth": False,
+        "deep": False,
+        "fuzz_tiers": False,
+        "no_toolchain": False,
+        "proxy": None,
+        "jitter_ms": 0,
+        "no_synthetic_probes": False,
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
@@ -80,3 +87,21 @@ def test_apply_presets_raises_max_payloads():
     assert args.max_payloads == 8
     assert args.threads == 30
     assert args.delay_ms == 0
+
+
+def test_stealth_preset():
+    args = _args(stealth=True)
+    cli.apply_scan_presets(args)
+    config = cli.build_config(args)
+    assert config.stealth_mode is True
+    assert config.fuzz_tier_mode is True
+    assert config.fuzz_headers is False
+    assert config.ignore_robots is False
+    assert config.threads <= 5
+    assert config.delay_ms >= 250
+    assert "VulnDix" not in config.user_agent
+
+
+def test_stealth_conflicts_with_all():
+    with pytest.raises(ValueError, match="preset"):
+        cli.build_config(_args(stealth=True, all=True))

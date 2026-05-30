@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+report.json
+third_party/linux-amd64/*
+third_party/windows-amd64/*
+third_party/linux-arm64/*
+third_party/sources/*
+!third_party/sources/README.md
+third_party/data/*
+!third_party/data/.gitkeep
+!third_party/**/.gitkeep

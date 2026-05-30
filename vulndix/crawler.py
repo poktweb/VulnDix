@@ -11,6 +11,7 @@ from playwright.sync_api import Page, sync_playwright
 
 from vulndix.auth import apply_cookies_to_context, build_extra_http_headers, perform_login
 from vulndix.discover import (
+    MAX_SYNTHETIC_ENDPOINTS,
     collect_endpoint_urls,
     dedupe_points,
     extract_links,
@@ -302,9 +303,12 @@ def crawl(
         browser.close()
 
     injectable = sum(1 for p in all_points if p.location in ("query", "body", "json", "path"))
-    if config.discover_params and injectable < 2:
+    if config.discover_params and config.synthetic_probes and injectable < 2:
         endpoints = collect_endpoint_urls(visited, captured_requests, scope_host)
-        synth = synthetic_probe_points(endpoints, default_headers, scope_host)
+        max_ep = 8 if config.stealth_mode else MAX_SYNTHETIC_ENDPOINTS
+        synth = synthetic_probe_points(
+            endpoints, default_headers, scope_host, max_endpoints=max_ep
+        )
         if synth:
             all_points.extend(synth)
             eprint(

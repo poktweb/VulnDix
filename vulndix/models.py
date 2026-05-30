@@ -151,3 +151,11 @@ class ScanConfig:
     wordlist_max_lines: int = 0
     discover_params: bool = True
     spa_wait_ms: int = 2500
+    stealth_mode: bool = False
+    deep_scan: bool = False
+    use_toolchain: bool = True
+    fuzz_tier_mode: bool = False
+    proxy: str | None = None
+    jitter_ms: int = 0
+    synthetic_probes: bool = True
+    hot_points: frozenset[tuple[str, str, str, str]] = field(default_factory=frozenset)
